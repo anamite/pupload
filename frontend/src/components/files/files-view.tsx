@@ -368,7 +368,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
           <DropdownMenuTrigger asChild>
             <button
               aria-label="Add"
-              className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground transition-transform active:scale-95 data-[state=open]:rotate-45"
+              className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_2px_6px_rgb(0_0_0/0.25)] transition-transform active:scale-95 data-[state=open]:rotate-45"
               style={{ bottom: "calc(var(--bottom-nav-h) + var(--player-h, 0px) + 1rem)" }}
             >
               <Plus className="size-6" strokeWidth={2.4} />

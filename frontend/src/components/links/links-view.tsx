@@ -240,7 +240,7 @@ export function LinksView({ shared }: { shared?: Partial<Draft> | null }) {
         <button
           aria-label="Add link"
           onClick={() => setDraft({ ...EMPTY })}
-          className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground transition-transform active:scale-95"
+          className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_2px_6px_rgb(0_0_0/0.25)] transition-transform active:scale-95"
           style={{ bottom: "calc(var(--bottom-nav-h) + var(--player-h, 0px) + 1rem)" }}
         >
           <Plus className="size-6" strokeWidth={2.4} />
