@@ -159,7 +159,7 @@ VERSION_NOW="$(sed -n 's/^__version__ = "\(.*\)"/\1/p' "$HERE/app/__init__.py" 2
 # ---------------------------------------------------------------------------
 # 2. Back up the database and settings (files themselves are never touched)
 # ---------------------------------------------------------------------------
-if [ -f "$HERE/data/pupload.db" ] || [ -f "$HERE/data/config.json" ]; then
+if [ -f "$HERE/data/pupload.db" ] || [ -f "$HERE/data/config.json" ] || [ -f "$HERE/data/vault.json" ]; then
   step "Backing up your settings and database"
   "$PY" - "$HERE/data" <<'PY'
 import shutil, sqlite3, sys, time
@@ -167,8 +167,9 @@ from pathlib import Path
 data = Path(sys.argv[1])
 dest = data / "backups" / time.strftime("install-%Y%m%d-%H%M%S")
 dest.mkdir(parents=True, exist_ok=True)
-if (data / "config.json").exists():
-    shutil.copy2(data / "config.json", dest / "config.json")
+for name in ("config.json", "vault.json"):   # vault.json: secure folders' wrapped key
+    if (data / name).exists():
+        shutil.copy2(data / name, dest / name)
 if (data / "pupload.db").exists():
     src = sqlite3.connect(str(data / "pupload.db"))
     out = sqlite3.connect(str(dest / "pupload.db"))
@@ -205,6 +206,7 @@ if [ "$VENV_OK" = 0 ]; then
 fi
 "$HERE/.venv/bin/pip" install -q --disable-pip-version-check --upgrade pip
 "$HERE/.venv/bin/pip" install -q --disable-pip-version-check -r "$HERE/requirements.txt"
+"$HERE/.venv/bin/pip" install -q --disable-pip-version-check -r "$HERE/requirements-secure.txt"   || warn "cryptography did not install; secure folders are unavailable (everything else works)"
 if [ "$THUMBS" = 1 ]; then
   "$HERE/.venv/bin/pip" install -q --disable-pip-version-check -r "$HERE/requirements-optional.txt" \
     || warn "Pillow did not install; thumbnails fall back to full images"

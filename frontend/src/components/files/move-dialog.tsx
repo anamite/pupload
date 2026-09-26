@@ -1,12 +1,13 @@
 import * as React from "react";
 import { useQuery } from "@tanstack/react-query";
-import { Folder, Home, Search } from "lucide-react";
+import { Folder, FolderLock, Home, Lock, Search } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Skeleton } from "@/components/ui/skeleton";
 import { api, type FolderNode } from "@/lib/api";
 import { plural } from "@/lib/format";
+import { keys } from "@/lib/queries";
 import { cn } from "@/lib/utils";
 
 export function MoveDialog({
@@ -25,7 +26,7 @@ export function MoveDialog({
   const [filter, setFilter] = React.useState("");
   const [busy, setBusy] = React.useState(false);
   const { data, isLoading } = useQuery({
-    queryKey: ["folders"],
+    queryKey: keys.folders,
     queryFn: async () => (await api<{ folders: FolderNode[] }>("/api/folders")).folders,
     enabled: open,
     staleTime: 0,
@@ -67,14 +68,23 @@ export function MoveDialog({
               <button
                 key={f.path || "/"}
                 onClick={() => setTarget(f.path)}
+                disabled={f.locked}
+                title={f.locked ? "Unlock secure folders to move things in here" : undefined}
                 style={{ paddingLeft: filter ? 10 : 10 + f.depth * 16 }}
                 className={cn(
-                  "flex w-full items-center gap-2.5 rounded-lg py-2 pr-2 text-left text-sm transition-colors hover:bg-accent",
+                  "flex w-full items-center gap-2.5 rounded-lg py-2 pr-2 text-left text-sm transition-colors hover:bg-accent disabled:cursor-not-allowed disabled:opacity-50 disabled:hover:bg-transparent",
                   f.path === target && "bg-primary/10 font-medium text-primary hover:bg-primary/15",
                 )}
               >
-                {f.depth === 0 ? <Home className="size-4 shrink-0" /> : <Folder className="size-4 shrink-0 text-folder" />}
+                {f.depth === 0 ? (
+                  <Home className="size-4 shrink-0" />
+                ) : f.secure ? (
+                  <FolderLock className="size-4 shrink-0 text-primary" />
+                ) : (
+                  <Folder className="size-4 shrink-0 text-folder" />
+                )}
                 <span className="truncate">{filter && f.depth ? f.path : f.name}</span>
+                {f.locked && <Lock className="ml-auto size-3.5 shrink-0" />}
               </button>
             ))
           )}

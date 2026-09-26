@@ -119,7 +119,8 @@ function sendChunk(job: UploadJob, start: number, end: number): Promise<ChunkRes
       } else if (xhr.status >= 500 || xhr.status === 0 || xhr.status === 408 || xhr.status === 429) {
         resolve({ kind: "retry", message: data.error || `Server error (${xhr.status})` });
       } else {
-        resolve({ kind: "fatal", message: data.error || `Failed (${xhr.status})` });
+        const message = xhr.status === 423 ? "Secure folder is locked — unlock it, then retry" : data.error;
+        resolve({ kind: "fatal", message: message || `Failed (${xhr.status})` });
       }
     };
     xhr.onerror = () => {

@@ -13,7 +13,7 @@ import json
 import sqlite3
 import threading
 import time
-from typing import Any, Callable, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional, Tuple
 
 from .config import DATA_DIR
 
@@ -243,6 +243,15 @@ def rename(old: str, new: str) -> None:
             "UPDATE meta SET path = ? || substr(path, ?) WHERE path LIKE ? ESCAPE '!'",
             (new, len(old) + 1, _like_prefix(old)),
         )
+        cx.commit()
+
+
+def rekey(pairs: Iterable[Tuple[str, str]]) -> None:
+    """Re-key individual rows (old, new), for moves where names below change too."""
+    with _write_lock:
+        cx = conn()
+        for old, new in pairs:
+            cx.execute("UPDATE OR REPLACE meta SET path = ? WHERE path = ?", (new, old))
         cx.commit()
 
 

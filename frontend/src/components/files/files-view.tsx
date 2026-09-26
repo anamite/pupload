@@ -6,14 +6,18 @@ import {
   Clock,
   Download,
   FolderInput,
+  FolderLock,
   FolderPlus,
   FolderUp,
   Hourglass,
   LayoutGrid,
   List,
+  LockKeyhole,
+  LockOpen,
   Music4,
   Plus,
   Search,
+  ShieldCheck,
   Smartphone,
   Trash2,
   Upload,
@@ -34,7 +38,8 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
-import { api, type Item, type Sort } from "@/lib/api";
+import { useVaultUi } from "@/components/vault/vault";
+import { api, isLocked, type Item, type Sort } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { useIsPhone } from "@/lib/hooks";
 import { keys, useItems, type FileView } from "@/lib/queries";
@@ -62,13 +67,19 @@ const VIEW_META: Record<Exclude<FileView, "files">, { title: string; sub: string
   mine: { title: "My uploads", sub: "Everything sent from this device", icon: Smartphone },
 };
 
+const NO_ITEMS: Item[] = [];
+
 export function FilesView({ view, path }: { view: FileView; path: string }) {
   const qc = useQueryClient();
   const phone = useIsPhone();
   const dialogs = useDialogs();
+  const vault = useVaultUi();
   const { settings, query, setQuery, sort, setSort, layout, setLayout } = useApp();
   const searching = query.trim().length > 0;
-  const { data: items = [], isLoading, isError, error } = useItems(view, path, sort, query);
+  const { data, isLoading, isError, error } = useItems(view, path, sort, query);
+  const locked = isError && isLocked(error);
+  const items = (!locked && data?.items) || NO_ITEMS;
+  const secureHere = view === "files" && !searching && !locked && !!data?.folder?.secure;
 
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const anchor = React.useRef<string | null>(null);
@@ -80,7 +91,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
   const dirInput = React.useRef<HTMLInputElement>(null);
 
   const uploadTarget = view === "files" && !searching ? path : "";
-  const canCreate = view === "files" && !searching;
+  const canCreate = view === "files" && !searching && !locked;
 
   React.useEffect(() => {
     setSelected(new Set());
@@ -88,7 +99,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
   }, [view, path, query]);
 
   React.useEffect(() => {
-    if (isError && view === "files" && path) {
+    if (isError && !isLocked(error) && view === "files" && path) {
       toast.error((error as Error)?.message || "Folder not found");
       navigate("files", "");
     }
@@ -149,7 +160,25 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
       qc.invalidateQueries({ queryKey: keys.items });
       toast.success("Folder created");
     } catch (err) {
-      toast.error((err as Error).message);
+      if (!vault.handle(err)) toast.error((err as Error).message);
+    }
+  };
+
+  const newSecureFolder = async () => {
+    if (!(await vault.ensureUnlocked())) return;
+    const name = await dialogs.prompt({
+      title: "New secure folder",
+      label: "Folder name",
+      confirmLabel: "Create",
+      placeholder: "Private",
+    });
+    if (!name) return;
+    try {
+      await api("/api/mkdir", { path, name, secure: true });
+      qc.invalidateQueries({ queryKey: keys.items });
+      toast.success("Secure folder created", { description: "Everything you put in it is encrypted on the Pi." });
+    } catch (err) {
+      if (!vault.handle(err)) toast.error((err as Error).message);
     }
   };
 
@@ -232,6 +261,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
     actions,
     selectedPaths,
     onSelect,
+    markSecure: view !== "files" || searching,
   });
 
   const meta = view !== "files" ? VIEW_META[view] : null;
@@ -246,7 +276,17 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
               <Search className="size-3.5" /> Search results
             </span>
           ) : view === "files" ? (
-            <Breadcrumbs path={path} />
+            <span className="flex min-w-0 items-center gap-2">
+              <Breadcrumbs path={path} />
+              {secureHere && (
+                <span
+                  className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/10 px-2 py-0.5 text-[11px] font-medium text-primary"
+                  title="Names and contents are encrypted on the Pi"
+                >
+                  <ShieldCheck className="size-3" /> Encrypted
+                </span>
+              )}
+            </span>
           ) : (
             meta && (
               <span className="flex items-center gap-1.5">
@@ -256,16 +296,13 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
           )
         }
         title={title}
-        count={isLoading ? undefined : items.length}
+        count={isLoading || locked ? undefined : items.length}
         actions={
           <div className="flex items-center gap-2">
             {canCreate && !phone && (
               <>
                 <UploadButton onFiles={() => fileInput.current?.click()} onFolder={() => dirInput.current?.click()} />
-                <Button variant="outline" onClick={newFolder}>
-                  <FolderPlus />
-                  <span className="hidden lg:inline">New folder</span>
-                </Button>
+                <NewFolderButton onFolder={newFolder} onSecure={secureHere ? undefined : newSecureFolder} />
               </>
             )}
             {searching && (
@@ -326,7 +363,18 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
       )}
 
       <div className="flex-1 px-4 pb-6 sm:px-6 lg:px-8">
-        {isLoading ? (
+        {locked ? (
+          <EmptyState
+            icon={LockKeyhole}
+            title="This secure folder is locked"
+            text="Enter the master password to see what's inside. Its files are encrypted on the Pi."
+            action={
+              <Button onClick={() => vault.ensureUnlocked()}>
+                <LockOpen /> Unlock
+              </Button>
+            }
+          />
+        ) : isLoading ? (
           <LoadingGrid layout={layout} />
         ) : items.length === 0 ? (
           <FilesEmpty view={view} searching={searching} canCreate={canCreate} onUpload={() => fileInput.current?.click()} />
@@ -384,6 +432,11 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
             <DropdownMenuItem onSelect={newFolder}>
               <FolderPlus /> New folder
             </DropdownMenuItem>
+            {!secureHere && (
+              <DropdownMenuItem onSelect={newSecureFolder}>
+                <FolderLock /> New secure folder
+              </DropdownMenuItem>
+            )}
           </DropdownMenuContent>
         </DropdownMenu>
       )}
@@ -449,6 +502,39 @@ function UploadButton({ onFiles, onFolder }: { onFiles: () => void; onFolder: ()
           </DropdownMenuItem>
           <DropdownMenuItem onSelect={onFolder}>
             <FolderUp /> Upload a folder
+          </DropdownMenuItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+    </div>
+  );
+}
+
+function NewFolderButton({ onFolder, onSecure }: { onFolder: () => void; onSecure?: () => void }) {
+  if (!onSecure)
+    return (
+      <Button variant="outline" onClick={onFolder}>
+        <FolderPlus />
+        <span className="hidden lg:inline">New folder</span>
+      </Button>
+    );
+  return (
+    <div className="flex">
+      <Button variant="outline" className="rounded-r-none" onClick={onFolder}>
+        <FolderPlus />
+        <span className="hidden lg:inline">New folder</span>
+      </Button>
+      <DropdownMenu>
+        <DropdownMenuTrigger asChild>
+          <Button variant="outline" className="rounded-l-none border-l-0 px-2" aria-label="More folder options">
+            <ChevronRight className="rotate-90" />
+          </Button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end">
+          <DropdownMenuItem onSelect={onFolder}>
+            <FolderPlus /> New folder
+          </DropdownMenuItem>
+          <DropdownMenuItem onSelect={onSecure}>
+            <FolderLock /> New secure folder
           </DropdownMenuItem>
         </DropdownMenuContent>
       </DropdownMenu>

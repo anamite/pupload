@@ -6,6 +6,7 @@ import {
   FolderOpen,
   Info,
   Link2,
+  LockOpen,
   Pencil,
   Pin,
   PinOff,
@@ -17,6 +18,7 @@ import { toast } from "sonner";
 import { useApp } from "@/components/app-context";
 import { useDialogs } from "@/components/dialogs";
 import { ContextMenuItem, ContextMenuSeparator } from "@/components/ui/context-menu";
+import { useVaultUi } from "@/components/vault/vault";
 import { DropdownMenuItem, DropdownMenuSeparator } from "@/components/ui/dropdown-menu";
 import { api, copyText, fileUrl, startDownload, zipUrl, type Item, type Stats } from "@/lib/api";
 import { plural } from "@/lib/format";
@@ -48,11 +50,14 @@ export function useFileActions(opts: {
   const qc = useQueryClient();
   const { settings } = useApp();
   const dialogs = useDialogs();
+  const vault = useVaultUi();
   const optsRef = React.useRef(opts);
   optsRef.current = opts;
 
   return React.useMemo<FileActions>(() => {
-    const fail = (err: unknown) => toast.error(err instanceof Error ? err.message : String(err));
+    const fail = (err: unknown) => {
+      if (!vault.handle(err)) toast.error(err instanceof Error ? err.message : String(err));
+    };
 
     const restore = async (ids: string[]) => {
       try {
@@ -65,8 +70,12 @@ export function useFileActions(opts: {
       }
     };
 
-    return {
+    const self: FileActions = {
       open(item) {
+        if (item.locked) {
+          vault.ensureUnlocked().then((ok) => ok && navigate("files", item.path));
+          return;
+        }
         if (item.is_dir) return navigate("files", item.path);
         if (item.kind === "audio") return player.play(item, optsRef.current.items);
         if (VIEWABLE.has(item.kind)) return optsRef.current.openViewer(item);
@@ -74,6 +83,10 @@ export function useFileActions(opts: {
       },
       download(items) {
         if (!items.length) return;
+        if (items.some((i) => i.locked)) {
+          vault.ensureUnlocked().then((ok) => ok && self.download(items.map((i) => ({ ...i, locked: false }))));
+          return;
+        }
         // A folder (or several things at once) can only come down as one ZIP.
         if (items.length === 1 && !items[0].is_dir) return startDownload(fileUrl("download", items[0].path));
         if (items.length === 1) startDownload(fileUrl("zip", items[0].path));
@@ -157,12 +170,19 @@ export function useFileActions(opts: {
         optsRef.current.openDetails(item);
       },
     };
-  }, [qc, settings.confirm_delete, settings.trash_days, dialogs]);
+    return self;
+  }, [qc, settings.confirm_delete, settings.trash_days, dialogs, vault]);
 }
 
 type Entry = { key: string; label: string; icon: LucideIcon; run: () => void; destructive?: boolean } | "sep";
 
 export function entriesFor(item: Item, actions: FileActions): Entry[] {
+  if (item.locked) {
+    return [
+      { key: "open", label: "Unlock and open", icon: LockOpen, run: () => actions.open(item) },
+      { key: "info", label: "Details", icon: Info, run: () => actions.details(item) },
+    ];
+  }
   if (item.is_dir) {
     return [
       { key: "open", label: "Open", icon: FolderOpen, run: () => actions.open(item) },
@@ -178,13 +198,18 @@ export function entriesFor(item: Item, actions: FileActions): Entry[] {
   return [
     { key: "open", label: item.kind === "audio" ? "Play" : "Open", icon: Play, run: () => actions.open(item) },
     { key: "dl", label: "Download", icon: Download, run: () => actions.download([item]) },
-    { key: "link", label: "Copy link", icon: Link2, run: () => actions.copyLink(item) },
-    {
-      key: "pin",
-      label: item.pinned ? "Allow expiry" : "Keep forever",
-      icon: item.pinned ? PinOff : Pin,
-      run: () => actions.togglePin(item),
-    },
+    // Secure files: a link only opens on unlocked devices, and they never expire.
+    ...(item.secure
+      ? []
+      : [
+          { key: "link", label: "Copy link", icon: Link2, run: () => actions.copyLink(item) },
+          {
+            key: "pin",
+            label: item.pinned ? "Allow expiry" : "Keep forever",
+            icon: item.pinned ? PinOff : Pin,
+            run: () => actions.togglePin(item),
+          },
+        ]),
     { key: "info", label: "Details", icon: Info, run: () => actions.details(item) },
     "sep",
     { key: "rename", label: "Rename", icon: Pencil, run: () => actions.rename(item) },

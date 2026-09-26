@@ -1,5 +1,15 @@
 import { keepPreviousData, useQuery, useQueryClient, type QueryClient } from "@tanstack/react-query";
-import { api, type Item, type Link, type Settings, type Sort, type Stats, type TrashItem } from "./api";
+import {
+  api,
+  type FolderInfo,
+  type Item,
+  type Link,
+  type Settings,
+  type Sort,
+  type Stats,
+  type TrashItem,
+  type VaultStatus,
+} from "./api";
 import type { View } from "./router";
 
 export const keys = {
@@ -8,6 +18,8 @@ export const keys = {
   items: ["items"] as const,
   links: ["links"] as const,
   trash: ["trash"] as const,
+  vault: ["vault"] as const,
+  folders: ["folders"] as const,
 };
 
 interface ConfigResponse {
@@ -51,9 +63,9 @@ export function useItems(view: FileView, path: string, sort: Sort, query: string
       if (searching) url = `/api/search?q=${encodeURIComponent(query.trim())}`;
       else if (view === "files") url = `/api/list?path=${encodeURIComponent(path)}&sort=${sort}`;
       else url = `/api/collect?mode=${view}`;
-      const data = await api<{ items: Item[]; stats: Stats; path: string }>(url);
+      const data = await api<{ items: Item[]; stats: Stats; path: string; folder?: FolderInfo }>(url);
       absorbStats(qc, data);
-      return data.items;
+      return { items: data.items, folder: data.folder ?? null };
     },
     placeholderData: keepPreviousData,
     retry: false,
@@ -79,8 +91,18 @@ export function useTrash() {
   });
 }
 
+export function useVault() {
+  return useQuery({
+    queryKey: keys.vault,
+    queryFn: () => api<VaultStatus & { ok: boolean }>("/api/vault"),
+    refetchInterval: 60_000,
+    staleTime: 10_000,
+  });
+}
+
 export function refreshAll(qc: QueryClient) {
   qc.invalidateQueries({ queryKey: keys.items });
   qc.invalidateQueries({ queryKey: keys.stats });
   qc.invalidateQueries({ queryKey: keys.trash });
+  qc.invalidateQueries({ queryKey: keys.folders });
 }

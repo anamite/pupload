@@ -7,6 +7,7 @@ import {
   FileText,
   FileVideo,
   Folder,
+  FolderLock,
   ImageIcon,
   Link2,
   type LucideIcon,
@@ -14,7 +15,9 @@ import {
 import type { Kind } from "@/lib/api";
 import { cn } from "@/lib/utils";
 
-export const KIND_META: Record<Kind | "link", { icon: LucideIcon; tint: string; label: string }> = {
+export type IconKind = Kind | "link" | "vault";
+
+export const KIND_META: Record<IconKind, { icon: LucideIcon; tint: string; label: string }> = {
   folder: { icon: Folder, tint: "text-folder bg-folder/15", label: "Folder" },
   image: { icon: ImageIcon, tint: "text-[oklch(0.62_0.13_190)] bg-[oklch(0.62_0.13_190/0.13)]", label: "Image" },
   video: { icon: FileVideo, tint: "text-[oklch(0.6_0.17_300)] bg-[oklch(0.6_0.17_300/0.13)]", label: "Video" },
@@ -25,6 +28,7 @@ export const KIND_META: Record<Kind | "link", { icon: LucideIcon; tint: string; 
   archive: { icon: FileArchive, tint: "text-[oklch(0.62_0.1_60)] bg-[oklch(0.62_0.1_60/0.13)]", label: "Archive" },
   file: { icon: FileIcon, tint: "text-muted-foreground bg-muted", label: "File" },
   link: { icon: Link2, tint: "text-primary bg-primary/12", label: "Link" },
+  vault: { icon: FolderLock, tint: "text-primary bg-primary/12", label: "Secure folder" },
 };
 
 export function KindIcon({
@@ -32,7 +36,7 @@ export function KindIcon({
   className,
   iconClassName,
 }: {
-  kind: Kind | "link";
+  kind: IconKind;
   className?: string;
   iconClassName?: string;
 }) {

@@ -21,14 +21,19 @@ export function DetailsDialog({ item, onClose }: { item: Item | null; onClose: (
         {it && (
           <>
             <DialogHeader className="flex-row items-center gap-3">
-              <KindIcon kind={it.kind} className="size-12 rounded-xl" />
+              <KindIcon kind={it.vault ? "vault" : it.kind} className="size-12 rounded-xl" />
               <div className="min-w-0">
                 <DialogTitle className="text-lg break-all">{it.name}</DialogTitle>
-                <DialogDescription>{KIND_META[it.kind]?.label ?? "File"}</DialogDescription>
+                <DialogDescription>{KIND_META[it.vault ? "vault" : it.kind]?.label ?? "File"}</DialogDescription>
               </div>
             </DialogHeader>
             <dl className="grid grid-cols-[7.5rem_minmax(0,1fr)] gap-x-3 gap-y-2.5 rounded-xl border bg-muted/40 p-4 text-sm">
               <Row label="Location">{it.parent ? `Home / ${it.parent.split("/").join(" / ")}` : "Home"}</Row>
+              {it.secure && (
+                <Row label="Security">
+                  {it.locked ? "Locked on this device" : "Encrypted on the Pi — names and contents"}
+                </Row>
+              )}
               <Row label={it.is_dir ? "Contains" : "Size"}>
                 {it.is_dir ? plural(it.children ?? 0, "item") : <span className="font-mono tabular">{fmtSize(it.size)}</span>}
               </Row>

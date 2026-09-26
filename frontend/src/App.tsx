@@ -15,6 +15,7 @@ import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
+import { VaultProvider } from "@/components/vault/vault";
 import { useConfig, useStats } from "@/lib/queries";
 import { useRoute } from "@/lib/router";
 import { applyTheme, savedTheme } from "@/lib/theme";
@@ -111,7 +112,9 @@ function Boot() {
   return (
     <AppProvider settings={data.settings} version={data.version}>
       <DialogsProvider>
-        <Shell />
+        <VaultProvider>
+          <Shell />
+        </VaultProvider>
       </DialogsProvider>
     </AppProvider>
   );

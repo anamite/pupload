@@ -1,6 +1,21 @@
 import * as React from "react";
-import { ArrowLeft, Check, Download, Monitor, Moon, Search, Settings, Sun, SunMoon, X } from "lucide-react";
+import {
+  ArrowLeft,
+  Check,
+  Download,
+  Lock,
+  LockOpen,
+  Monitor,
+  Moon,
+  Search,
+  Settings,
+  ShieldOff,
+  Sun,
+  SunMoon,
+  X,
+} from "lucide-react";
 import { useApp } from "@/components/app-context";
+import { useVaultUi } from "@/components/vault/vault";
 import { Button } from "@/components/ui/button";
 import {
   DropdownMenu,
@@ -133,6 +148,7 @@ export function TopBar({ view }: { view: View }) {
           )}
           {!(phone && searchOpen) && (
             <>
+              <VaultButton />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" aria-label="Theme">
@@ -161,5 +177,42 @@ export function TopBar({ view }: { view: View }) {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Secure folders: unlock from here, or see that this device is unlocked and lock it. */
+function VaultButton() {
+  const vault = useVaultUi();
+  const status = vault.status;
+  if (!status?.configured) return null;
+  if (!status.unlocked)
+    return (
+      <Button variant="ghost" size="icon" aria-label="Unlock secure folders" title="Unlock secure folders" onClick={() => vault.ensureUnlocked()}>
+        <Lock />
+      </Button>
+    );
+  const until = status.expires
+    ? new Date(status.expires * 1000).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })
+    : null;
+  return (
+    <DropdownMenu>
+      <DropdownMenuTrigger asChild>
+        <Button variant="ghost" size="icon" aria-label="Secure folders are unlocked" title="Secure folders are unlocked" className="text-primary hover:text-primary">
+          <LockOpen />
+        </Button>
+      </DropdownMenuTrigger>
+      <DropdownMenuContent align="end" className="min-w-60">
+        <div className="px-2 py-1.5">
+          <div className="text-sm font-medium">Secure folders unlocked</div>
+          {until && <div className="text-xs text-muted-foreground">on this device until {until}</div>}
+        </div>
+        <DropdownMenuItem onSelect={() => vault.lock()}>
+          <Lock /> Lock this device
+        </DropdownMenuItem>
+        <DropdownMenuItem onSelect={() => vault.lock(true)}>
+          <ShieldOff /> Lock every device
+        </DropdownMenuItem>
+      </DropdownMenuContent>
+    </DropdownMenu>
   );
 }

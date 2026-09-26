@@ -1,6 +1,6 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
-import { RotateCcw, Search, Trash2, X } from "lucide-react";
+import { Lock, RotateCcw, Search, Trash2, X } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "@/components/app-context";
 import { useDialogs } from "@/components/dialogs";
@@ -10,6 +10,7 @@ import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import { Skeleton } from "@/components/ui/skeleton";
+import { useVaultUi } from "@/components/vault/vault";
 import { api, type Stats, type TrashItem } from "@/lib/api";
 import { fmtSize, fmtWhen, plural } from "@/lib/format";
 import { absorbStats, keys, refreshAll, useStats, useTrash } from "@/lib/queries";
@@ -35,7 +36,11 @@ function daysLeft(purgeAt: number | null) {
 export function BinView() {
   const qc = useQueryClient();
   const dialogs = useDialogs();
+  const vault = useVaultUi();
   const { query, setQuery, settings } = useApp();
+  const fail = (err: unknown) => {
+    if (!vault.handle(err)) toast.error((err as Error).message);
+  };
   const { data: items = [], isLoading } = useTrash();
   const { data: stats } = useStats();
   const [filter, setFilter] = React.useState<Filter>("all");
@@ -77,7 +82,7 @@ export function BinView() {
             : undefined,
       });
     } catch (err) {
-      toast.error((err as Error).message);
+      fail(err);
     }
     setBusy(false);
   };
@@ -96,7 +101,7 @@ export function BinView() {
       after(data);
       toast.success(data.freed ? `Deleted · ${fmtSize(data.freed)} freed` : "Deleted");
     } catch (err) {
-      toast.error((err as Error).message);
+      fail(err);
     }
     setBusy(false);
   };
@@ -111,11 +116,15 @@ export function BinView() {
     if (!yes) return;
     setBusy(true);
     try {
-      const data = await api<{ count: number; bytes: number }>("/api/trash/empty", {});
+      const data = await api<{ count: number; bytes: number; kept?: number }>("/api/trash/empty", {});
       after(data);
-      toast.success(`Recycle bin emptied${data.bytes ? ` · ${fmtSize(data.bytes)} freed` : ""}`);
+      toast.success(`Recycle bin emptied${data.bytes ? ` · ${fmtSize(data.bytes)} freed` : ""}`, {
+        description: data.kept
+          ? `${plural(data.kept, "secure item")} kept. Unlock secure folders to delete ${data.kept === 1 ? "it" : "them"}.`
+          : undefined,
+      });
     } catch (err) {
-      toast.error((err as Error).message);
+      fail(err);
     }
     setBusy(false);
   };
@@ -265,10 +274,14 @@ function BinRow({
       )}
     >
       <Checkbox checked={selected} onCheckedChange={onToggle} aria-label={`Select ${item.name}`} />
-      <KindIcon kind={item.file_kind} className="size-10 rounded-xl" />
+      <KindIcon
+        kind={item.locked && item.kind === "file" ? "vault" : item.file_kind}
+        className={cn("size-10 rounded-xl", item.locked && "bg-muted text-muted-foreground")}
+      />
       <div className="min-w-0 flex-1">
-        <div className="truncate text-sm font-medium" title={item.name}>
-          {item.name}
+        <div className={cn("flex min-w-0 items-center gap-1.5 text-sm font-medium", item.locked && "text-muted-foreground")} title={item.name}>
+          {item.secure && <Lock className="size-3 shrink-0 text-primary" aria-label="Secure" />}
+          <span className="truncate">{item.name}</span>
         </div>
         <div className="truncate text-xs text-muted-foreground" title={where}>
           {item.kind === "link" ? where : `from ${where}`}

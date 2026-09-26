@@ -22,6 +22,25 @@ export interface Item {
   device_name: string;
   device_ip: string;
   children?: number;
+  /** Inside a secure folder (or is one): encrypted on disk. */
+  secure?: boolean;
+  /** The top folder of a secure folder. */
+  vault?: boolean;
+  /** A secure folder this device has not unlocked. */
+  locked?: boolean;
+}
+
+export interface FolderInfo {
+  secure: boolean;
+  vault: boolean;
+}
+
+export interface VaultStatus {
+  available: boolean;
+  configured: boolean;
+  unlocked: boolean;
+  expires: number | null;
+  hours: number;
 }
 
 export interface Stats {
@@ -54,6 +73,7 @@ export interface Settings {
   show_hidden: boolean;
   thumbnails: boolean;
   keep_free_bytes: number;
+  vault_hours: number;
 }
 
 export interface StorageOption {
@@ -93,15 +113,32 @@ export interface TrashItem {
   purge_at: number | null;
   file_kind: Kind | "link";
   url: string | null;
+  secure?: boolean;
+  locked?: boolean;
 }
 
 export interface FolderNode {
   path: string;
   name: string;
   depth: number;
+  secure?: boolean;
+  locked?: boolean;
 }
 
-export class ApiError extends Error {}
+export class ApiError extends Error {
+  constructor(
+    message: string,
+    readonly status = 0,
+  ) {
+    super(message);
+  }
+  /** A secure folder this device has not unlocked. */
+  get locked() {
+    return this.status === 423;
+  }
+}
+
+export const isLocked = (err: unknown) => err instanceof ApiError && err.locked;
 
 export async function api<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
   const init: RequestInit = { method: body === undefined ? "GET" : "POST", headers: deviceHeaders() };
@@ -119,9 +156,9 @@ export async function api<T = Record<string, unknown>>(path: string, body?: unkn
   try {
     data = await res.json();
   } catch {
-    throw new ApiError(`Server error (${res.status})`);
+    throw new ApiError(`Server error (${res.status})`, res.status);
   }
-  if (!res.ok || !data.ok) throw new ApiError(data.error || "Request failed");
+  if (!res.ok || !data.ok) throw new ApiError(data.error || "Request failed", res.status);
   return data as T;
 }
 

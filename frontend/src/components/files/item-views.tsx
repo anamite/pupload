@@ -1,5 +1,5 @@
 import * as React from "react";
-import { MoreVertical, Pin, Smartphone } from "lucide-react";
+import { Lock, MoreVertical, Pin, Smartphone } from "lucide-react";
 import { KindIcon } from "@/components/file-icon";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,30 @@ export interface ItemViewProps {
   actions: FileActions;
   selectedPaths: () => string[];
   onSelect: (item: Item, mode: "toggle" | "range") => void;
+  /** Mark secure files with a lock (views that mix them with other files). */
+  markSecure?: boolean;
+}
+
+const iconKind = (item: Item) => (item.vault ? "vault" : item.kind);
+
+function Name({ item, mark, className }: { item: Item; mark?: boolean; className?: string }) {
+  return (
+    <div className={cn("flex min-w-0 items-center gap-1.5", className)} title={item.name}>
+      {mark && item.secure && !item.vault && <Lock className="size-3 shrink-0 text-primary" aria-label="Secure" />}
+      <span className="truncate">{item.name}</span>
+    </div>
+  );
+}
+
+function FolderSub({ item }: { item: Item }) {
+  if (item.locked)
+    return (
+      <span className="inline-flex items-center gap-1">
+        <Lock className="size-3" /> Locked
+      </span>
+    );
+  if (item.vault) return <span>Secure · {plural(item.children ?? 0, "item")}</span>;
+  return <span>{plural(item.children ?? 0, "item")}</span>;
 }
 
 function useItemBehaviour({ item, selected, selecting, actions, selectedPaths, onSelect }: ItemViewProps) {
@@ -157,12 +181,21 @@ export function FolderTile(props: ItemViewProps) {
         className={cn(
           "group relative flex h-16 animate-rise items-center gap-3 rounded-xl border bg-card pr-1.5 pl-3 transition-[background-color,border-color,box-shadow] select-none cv-auto [contain-intrinsic-size:auto_64px]",
           "hover:border-foreground/15 hover:shadow-sm",
+          item.locked && "border-dashed bg-muted/40",
           selected && "border-primary/60 bg-primary/5 ring-2 ring-primary/25",
           dropTarget && "border-primary bg-primary/10 ring-2 ring-primary/40",
         )}
       >
         <div className="relative size-9 shrink-0">
-          <KindIcon kind="folder" className={cn("size-9 transition-opacity", (selecting || selected) && "opacity-0", "group-hover:[@media(hover:hover)]:opacity-0")} />
+          <KindIcon
+            kind={iconKind(item)}
+            className={cn(
+              "size-9 transition-opacity",
+              item.locked && "bg-muted text-muted-foreground",
+              (selecting || selected) && "opacity-0",
+              "group-hover:[@media(hover:hover)]:opacity-0",
+            )}
+          />
           <Checkbox
             checked={selected}
             onClick={(e) => {
@@ -177,11 +210,13 @@ export function FolderTile(props: ItemViewProps) {
             )}
           />
         </div>
-        <div className="min-w-0 flex-1">
+        <div className={cn("min-w-0 flex-1", item.locked && "text-muted-foreground")}>
           <div className="truncate text-sm font-medium" title={item.name}>
             {item.name}
           </div>
-          <div className="truncate text-xs text-muted-foreground tabular">{plural(item.children ?? 0, "item")}</div>
+          <div className="truncate text-xs text-muted-foreground tabular">
+            <FolderSub item={item} />
+          </div>
         </div>
         <ItemMenu item={item} actions={actions} className="touch:opacity-100 opacity-0 group-hover:opacity-100 focus-visible:opacity-100 data-[state=open]:opacity-100" />
       </div>
@@ -190,7 +225,7 @@ export function FolderTile(props: ItemViewProps) {
 }
 
 export function FileCard(props: ItemViewProps) {
-  const { item, selected, selecting, actions, onSelect, thumbnails, index } = props;
+  const { item, selected, selecting, actions, onSelect, thumbnails, index, markSecure } = props;
   const { onClick, dragProps } = useItemBehaviour(props);
   const hasThumb = item.kind === "image" && thumbnails;
   return (
@@ -235,9 +270,7 @@ export function FileCard(props: ItemViewProps) {
           </div>
         </div>
         <div className="flex min-w-0 flex-col gap-1 px-3 pt-2.5 pb-3">
-          <div className="truncate text-sm leading-tight font-medium" title={item.name}>
-            {item.name}
-          </div>
+          <Name item={item} mark={markSecure} className="text-sm leading-tight font-medium" />
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground">
             <span className="shrink-0 font-mono text-[11px] tabular">{fmtSize(item.size)}</span>
             <Expiry item={item} />
@@ -252,7 +285,7 @@ export function FileCard(props: ItemViewProps) {
 /* --------------------------------------------------------------- list --- */
 
 export function ItemRow(props: ItemViewProps) {
-  const { item, selected, selecting, actions, onSelect, thumbnails } = props;
+  const { item, selected, selecting, actions, onSelect, thumbnails, markSecure } = props;
   const { onClick, dragProps, dropTarget } = useItemBehaviour(props);
   return (
     <WithContextMenu item={item} actions={actions}>
@@ -273,7 +306,7 @@ export function ItemRow(props: ItemViewProps) {
                 <Thumb item={item} thumbnails={thumbnails} />
               </div>
             ) : (
-              <KindIcon kind={item.kind} className="size-9" />
+              <KindIcon kind={iconKind(item)} className={cn("size-9", item.locked && "bg-muted text-muted-foreground")} />
             )}
           </div>
           <Checkbox
@@ -290,13 +323,11 @@ export function ItemRow(props: ItemViewProps) {
             )}
           />
         </div>
-        <div className="min-w-0">
-          <div className="truncate text-sm font-medium" title={item.name}>
-            {item.name}
-          </div>
+        <div className={cn("min-w-0", item.locked && "text-muted-foreground")}>
+          <Name item={item} mark={markSecure} className="text-sm font-medium" />
           <div className="flex min-w-0 items-center gap-1.5 text-xs text-muted-foreground md:hidden">
             {item.is_dir ? (
-              <span>{plural(item.children ?? 0, "item")}</span>
+              <FolderSub item={item} />
             ) : (
               <>
                 <span className="shrink-0 font-mono text-[11px] tabular">{fmtSize(item.size)}</span>
@@ -313,7 +344,7 @@ export function ItemRow(props: ItemViewProps) {
           )}
         </div>
         <div className="hidden text-right font-mono text-xs text-muted-foreground tabular md:block">
-          {item.is_dir ? plural(item.children ?? 0, "item") : fmtSize(item.size)}
+          {item.locked ? "Locked" : item.is_dir ? plural(item.children ?? 0, "item") : fmtSize(item.size)}
         </div>
         <div className="hidden text-xs text-muted-foreground md:block">{fmtWhen(item.created)}</div>
         <div className="hidden min-w-0 text-xs md:block">

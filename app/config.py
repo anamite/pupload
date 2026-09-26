@@ -33,6 +33,7 @@ DEFAULTS: Dict[str, Any] = {
     "show_hidden": False,
     "thumbnails": True,
     "keep_free_bytes": 512 * 1024 * 1024,   # never fill the disk past this
+    "vault_hours": 12,              # how long an unlock lasts on a device
 }
 
 # Filesystems that are never interesting as a storage target.
@@ -97,6 +98,7 @@ def sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
     cfg["show_hidden"] = _as_bool(cfg["show_hidden"], False)
     cfg["thumbnails"] = _as_bool(cfg["thumbnails"], True)
     cfg["keep_free_bytes"] = _as_int(cfg["keep_free_bytes"], DEFAULTS["keep_free_bytes"], 0)
+    cfg["vault_hours"] = _as_int(cfg["vault_hours"], DEFAULTS["vault_hours"], 1, 24 * 30)
     return cfg
 
 

@@ -1,0 +1,2 @@
+# Secure folders (encryption). Separate so a Pi where it cannot install still runs pupload.
+cryptography>=41

@@ -1,8 +1,9 @@
 import * as React from "react";
 import { useQuery, useQueryClient } from "@tanstack/react-query";
-import { HardDrive, Share, Smartphone, SquarePlus } from "lucide-react";
+import { HardDrive, KeyRound, Lock, LockOpen, Share, ShieldCheck, ShieldOff, Smartphone, SquarePlus } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "@/components/app-context";
+import { useVaultUi } from "@/components/vault/vault";
 import { Button } from "@/components/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -89,6 +90,7 @@ export function SettingsDialog() {
         thumbnails: draft.thumbnails,
         show_hidden: draft.show_hidden,
         theme,
+        vault_hours: draft.vault_hours,
       });
       setDeviceName(device);
       refreshAll(qc);
@@ -254,6 +256,8 @@ export function SettingsDialog() {
             </Field>
           </Section>
 
+          <VaultSection hours={draft.vault_hours} onHours={(h) => set("vault_hours", h)} />
+
           <Section title="Behaviour">
             <SwitchRow label="Ask before moving things to the bin" checked={draft.confirm_delete} onChange={(v) => set("confirm_delete", v)} />
             <SwitchRow label="Image thumbnails" hint="Turn off on very small Pi models." checked={draft.thumbnails} onChange={(v) => set("thumbnails", v)} />
@@ -294,6 +298,95 @@ export function SettingsDialog() {
         </DialogFooter>
       </DialogContent>
     </Dialog>
+  );
+}
+
+function VaultSection({ hours, onHours }: { hours: number; onHours: (h: number) => void }) {
+  const vault = useVaultUi();
+  const status = vault.status;
+  if (!status) return null;
+  return (
+    <Section title="Secure folders" icon={ShieldCheck}>
+      {!status.available ? (
+        <p className="text-sm text-muted-foreground">
+          Not available: the Pi is missing the <code className="font-mono text-xs">cryptography</code> package. Run the
+          installer again to add it.
+        </p>
+      ) : !status.configured ? (
+        <>
+          <p className="text-sm leading-relaxed text-muted-foreground">
+            Secure folders are encrypted on the Pi and stay locked until you enter one master password. Other devices on
+            the network see them greyed out, and someone who takes the SD card or drive cannot read them.
+          </p>
+          <Button className="w-fit" onClick={() => vault.ensureUnlocked()}>
+            <ShieldCheck /> Set up secure folders
+          </Button>
+        </>
+      ) : (
+        <>
+          <div className="flex items-center gap-3 rounded-xl border bg-card px-3 py-2.5">
+            <span
+              className={cn(
+                "flex size-9 shrink-0 items-center justify-center rounded-lg",
+                status.unlocked ? "bg-primary/12 text-primary" : "bg-muted text-muted-foreground",
+              )}
+            >
+              {status.unlocked ? <LockOpen className="size-4" /> : <Lock className="size-4" />}
+            </span>
+            <div className="min-w-0 flex-1 text-sm">
+              <div className="font-medium">{status.unlocked ? "Unlocked on this device" : "Locked on this device"}</div>
+              {status.unlocked && status.expires && (
+                <div className="text-xs text-muted-foreground">
+                  until {new Date(status.expires * 1000).toLocaleString(undefined, { weekday: "short", hour: "2-digit", minute: "2-digit" })}
+                </div>
+              )}
+            </div>
+            {status.unlocked ? (
+              <Button variant="outline" size="sm" onClick={() => vault.lock()}>
+                Lock
+              </Button>
+            ) : (
+              <Button size="sm" onClick={() => vault.ensureUnlocked()}>
+                Unlock
+              </Button>
+            )}
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button variant="outline" size="sm" onClick={() => vault.changePassword()}>
+              <KeyRound /> Change password
+            </Button>
+            <Button variant="outline" size="sm" onClick={() => vault.recover()}>
+              Forgot password?
+            </Button>
+            {status.unlocked && (
+              <Button variant="outline" size="sm" onClick={() => vault.lock(true)}>
+                <ShieldOff /> Lock every device
+              </Button>
+            )}
+          </div>
+          <Field label="Stay unlocked for" hint="After this, a device has to enter the password again. Restarting the Pi locks everything.">
+            <div className="flex flex-wrap items-center gap-2">
+              <Segmented
+                value={String(hours)}
+                options={["1", "12", "24", "168"]}
+                labels={{ "1": "1 hour", "12": "12 hours", "24": "1 day", "168": "1 week" }}
+                onChange={(v) => onHours(parseInt(v, 10))}
+              />
+              <Input
+                type="number"
+                min={1}
+                max={720}
+                value={hours}
+                onChange={(e) => onHours(Math.min(720, Math.max(1, parseInt(e.target.value || "1", 10))))}
+                className="w-24"
+                aria-label="Hours to stay unlocked"
+              />
+              <span className="text-sm text-muted-foreground">hours</span>
+            </div>
+          </Field>
+        </>
+      )}
+    </Section>
   );
 }
 

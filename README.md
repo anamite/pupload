@@ -2,10 +2,14 @@
 
 A shared drive for your home network. Open the Pi's address on any phone,
 tablet or laptop: drop files in, save links, and everything is there for
-everyone else on the network. No accounts, no cloud.
+everyone else on the network. No accounts, no cloud, and encrypted secure
+folders for the things that aren't for everyone.
 
 * **Files** expire after 30 days by default. Folders and links never expire.
 * **Links**: save as many as you like, with notes and tags. They stay until you delete them.
+* **Secure folders**: encrypted folders, greyed out and locked until you enter one master
+  password. Their files and names are encrypted on the Pi, so they stay private from
+  other people on the network *and* from anyone who takes the SD card or drive.
 * **Recycle bin**: deleted files, folders and links wait 30 days (configurable), with
   restore, delete-forever and *Empty bin*.
 * **Device tracking**: every upload, link and delete records which device did it.
@@ -28,13 +32,14 @@ That's all you need. The installer:
 1. clones pupload into `~/pupload`, or updates it if it's already there
 2. sets up a Python environment from the **system** Python (not an active conda/pyenv
    one, so the service never depends on your shell setup) and installs Pillow for thumbnails
-3. uses the prebuilt web interface when it matches the code. Otherwise it makes sure
+3. installs `cryptography` for secure folders (if that fails, everything else still works)
+4. uses the prebuilt web interface when it matches the code. Otherwise it makes sure
    **Node.js 20+** is present (from apt, NodeSource or nodejs.org, whichever works on
    your Pi) and builds the React interface
-4. picks a **port**: 8080, or the next free one if another program already uses it
-5. registers a **systemd service**, so pupload runs in the background and starts on boot,
+5. picks a **port**: 8080, or the next free one if another program already uses it
+6. registers a **systemd service**, so pupload runs in the background and starts on boot,
    then checks that it actually answers
-6. prints the address to open, e.g. `http://192.168.1.42:8080` and `http://raspberrypi.local:8080`
+7. prints the address to open, e.g. `http://192.168.1.42:8080` and `http://raspberrypi.local:8080`
 
 If Node.js can't be installed (a Pi Zero or Pi 1 with an ARMv6 CPU, for example), the
 installer falls back to the prebuilt interface in `app/web`, so pupload still works.
@@ -46,7 +51,7 @@ Run the same one-line command again (or `~/pupload/install.sh`). It:
 * downloads the new version and continues with the installer that came with it
 * **never touches your files, links, recycle bin or settings**. `data/` and your storage
   folder are outside the program files and are ignored by git
-* backs up `config.json` and the database to `data/backups/` first (the last five are kept)
+* backs up `config.json`, `vault.json` and the database to `data/backups/` first (the last five are kept)
 * upgrades the database in place with numbered migrations, each applied once. The server
   also snapshots the database before it migrates
 * rebuilds the interface only if its code changed, into a side folder that's swapped in when
@@ -149,6 +154,64 @@ its folder once every byte has arrived, so nobody ever sees a half file.
 
 ---
 
+## Secure folders
+
+Everything else in pupload is open to anyone on your network. A **secure folder** is the
+exception: it shows up greyed out with a lock, and nobody can open, download, rename, move
+or delete it until the master password is entered on their device.
+
+**Set up once.** Choose **New folder ▾ → New secure folder** (or **+ → New secure folder**
+on a phone, or **Settings → Secure folders**). The first time, you pick a master password
+and get a **recovery key**. Save it: if you forget the password, the recovery key is the
+only way back in. Without either, nobody can recover the files, including you.
+
+**Unlock once, see everything.** One password opens every secure folder. Tap a locked
+folder (or the lock in the top bar), enter the password, and that device can open every
+secure folder until the unlock expires (12 hours by default, **Settings → Secure folders →
+Stay unlocked for**), you press **Lock**, or the Pi restarts. Other devices stay locked
+until they enter the password too. **Lock every device** ends all unlocks at once.
+
+Inside a secure folder everything works as usual (upload, play, view, ZIP download, move,
+recycle bin), with a few differences:
+
+* files in secure folders never auto-expire, and there's no *Copy link* (a link opens only
+  on unlocked devices)
+* moving something into a secure folder encrypts it, and moving it out decrypts it (the
+  Pi needs room for a copy while it does that)
+* search, *Recent*, *Media* and *My uploads* only include secure files on unlocked devices
+* on a locked device, secure items in the recycle bin appear as *Locked item*, and *Empty
+  bin* leaves them in place
+
+### What it protects, and what it doesn't
+
+* **Someone on your network**: they see that a secure folder exists, but can't open it,
+  list what's inside, or change or delete it.
+* **Someone who takes the SD card or drive**: file contents *and* names inside secure
+  folders are encrypted with AES-256-GCM. The key that decrypts them is stored only wrapped
+  by your password (scrypt) in `data/vault.json`, and the unwrapped key exists only in the
+  Pi's memory while some device is unlocked. Thumbnails of secure images are kept in memory,
+  never on disk. On disk you can still see the secure folder's own name, how many files it
+  holds and roughly how big they are.
+* **Not covered**: someone who can log into the Pi, or grab its memory, *while it is
+  unlocked*; someone who secretly modifies the SD card and puts it back, then waits for you
+  to type the password; and a weak password (a copied card can be attacked offline, so use
+  a few random words). Swap on the SD card could, rarely, hold decrypted data. Switch it off
+  or to zram for the strongest setup (`sudo dphys-swapfile swapoff && sudo systemctl disable
+  dphys-swapfile`).
+* **Plain HTTP**: on a normal home network your password travels unencrypted over Wi-Fi.
+  Serve pupload over HTTPS (for example with the Tailscale command above) if that matters.
+  The unlock cookie is HttpOnly and SameSite=Strict, and is marked Secure over HTTPS.
+* **Changing the password** re-wraps the same key, so files don't need re-encrypting.
+  Older copies of `vault.json` in `data/backups/` still open with the *old* password.
+  Delete them if that password was exposed.
+* **Keep `data/vault.json` safe.** If it's lost, secure folders can't be decrypted, even
+  with the password. The installer backs it up with the database.
+
+Guessing is slowed down: each try costs a scrypt computation, and after five wrong
+passwords a device has to wait before trying again, longer after each further miss.
+
+---
+
 ## Settings
 
 Everything is under the gear icon (or **More → Settings** on phones) and applies right away.
@@ -159,6 +222,8 @@ Everything is under the gear icon (or **More → Settings** on phones) and appli
 * **Auto-expiry**: days until a file expires (0 = never). Expired files go to the recycle bin,
   not straight to deletion. Optionally the countdown restarts whenever a file is opened.
 * **Recycle bin**: how long deleted items are kept (7 / 30 / 90 days, or until you empty it).
+* **Secure folders**: set up, lock or unlock, change the password, reset it with the
+  recovery key, and choose how long an unlock lasts.
 
 The recycle bin lives inside the storage folder (`.pupload-trash`), so deleting even a huge
 folder is instant. Items in the bin still use disk space, and they count towards the limit
@@ -168,8 +233,9 @@ until the bin is emptied.
 
 ## A note on access
 
-There is no login, by design. Anyone who can reach the address can read, upload and
-delete (deletes are recoverable from the recycle bin). That's fine on a home network, but
+There is no login for the shared drive, by design. Anyone who can reach the address can
+read, upload and delete (deletes are recoverable from the recycle bin). Put anything private
+in a [secure folder](#secure-folders). That's fine on a home network, but
 don't port-forward pupload to the internet. For remote access use a VPN or Tailscale.
 
 Uploads can't escape the storage folder, and saved links may only use `http(s)`, `ftp`,
@@ -182,7 +248,7 @@ inline; everything else downloads with `nosniff`, so an uploaded HTML file can't
 
 ```bash
 # backend
-python3 -m venv .venv && .venv/bin/pip install -r requirements.txt
+python3 -m venv .venv && .venv/bin/pip install -r requirements.txt -r requirements-secure.txt
 .venv/bin/python run.py --port 8080
 
 # frontend with hot reload (proxies /api to :8080)
@@ -200,7 +266,8 @@ install.sh              one-line installer / updater (+ systemd service)
 run.py                  launcher (prints the LAN address)
 app/
   main.py               HTTP routes, range requests, streamed ZIP, links, recycle bin
-  storage.py            safe paths, listings, quota, expiry
+  storage.py            safe paths (real names <-> encrypted on-disk names), listings, quota, expiry
+  vault.py              secure folders: keys, encrypted file format, sessions
   trash.py              recycle bin: move in, restore, purge
   links.py              link validation and page-title lookup
   config.py             settings + disk discovery
@@ -212,5 +279,5 @@ frontend/
   src/components/       files, links, bin, layout, settings
   src/lib/              API client, uploads queue, audio player, device ID, theme, PWA
   public/               manifest, service worker, icons
-data/                   config.json, pupload.db, files/, backups/ (not in git)
+data/                   config.json, vault.json, pupload.db, files/, backups/ (not in git)
 ```
