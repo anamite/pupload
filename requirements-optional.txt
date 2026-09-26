@@ -1,0 +1,2 @@
+# Optional: image thumbnails in the grid (nice on a Pi 4+, skip on a Pi Zero)
+Pillow>=10.0

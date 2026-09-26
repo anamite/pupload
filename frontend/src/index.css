@@ -1,0 +1,216 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "@fontsource-variable/bricolage-grotesque";
+@import "@fontsource-variable/instrument-sans";
+@import "@fontsource-variable/jetbrains-mono";
+
+@custom-variant dark (&:is([data-theme="slate"] *, [data-theme="ink"] *));
+@custom-variant touch (@media (hover: none) and (pointer: coarse));
+
+/* -------------------------------------------------------------------------
+   Themes. "Paper" is warm off-white, "Slate" a deep blue-grey, "Ink" true
+   black for OLED phones. One vermilion signal colour runs through all three.
+   ------------------------------------------------------------------------- */
+:root,
+[data-theme="light"] {
+  --radius: 0.75rem;
+  --background: oklch(0.975 0.006 85);
+  --foreground: oklch(0.2 0.012 60);
+  --card: oklch(0.995 0.003 85);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.995 0.003 85);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.63 0.2 36);
+  --primary-foreground: oklch(0.99 0.01 60);
+  --secondary: oklch(0.945 0.009 80);
+  --secondary-foreground: oklch(0.25 0.012 60);
+  --muted: oklch(0.945 0.009 80);
+  --muted-foreground: oklch(0.5 0.014 65);
+  --accent: oklch(0.935 0.014 70);
+  --accent-foreground: oklch(0.22 0.012 60);
+  --destructive: oklch(0.56 0.21 25);
+  --border: oklch(0.9 0.01 75);
+  --input: oklch(0.88 0.012 75);
+  --ring: oklch(0.63 0.2 36 / 0.55);
+  --sidebar: oklch(0.955 0.009 82);
+  --folder: oklch(0.8 0.13 75);
+  --success: oklch(0.6 0.13 155);
+  --warning: oklch(0.72 0.15 70);
+  --grain-opacity: 0.35;
+  color-scheme: light;
+}
+
+[data-theme="slate"] {
+  --background: oklch(0.19 0.012 255);
+  --foreground: oklch(0.94 0.006 250);
+  --card: oklch(0.225 0.013 255);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.24 0.014 255);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.7 0.18 40);
+  --primary-foreground: oklch(0.16 0.02 40);
+  --secondary: oklch(0.27 0.014 255);
+  --secondary-foreground: oklch(0.92 0.006 250);
+  --muted: oklch(0.26 0.013 255);
+  --muted-foreground: oklch(0.68 0.015 250);
+  --accent: oklch(0.29 0.016 255);
+  --accent-foreground: oklch(0.96 0.005 250);
+  --destructive: oklch(0.66 0.19 25);
+  --border: oklch(0.3 0.014 255);
+  --input: oklch(0.34 0.016 255);
+  --ring: oklch(0.7 0.18 40 / 0.55);
+  --sidebar: oklch(0.21 0.012 255);
+  --folder: oklch(0.78 0.12 75);
+  --success: oklch(0.72 0.14 155);
+  --warning: oklch(0.8 0.14 75);
+  --grain-opacity: 0.2;
+  color-scheme: dark;
+}
+
+[data-theme="ink"] {
+  --background: oklch(0 0 0);
+  --foreground: oklch(0.93 0.004 80);
+  --card: oklch(0.155 0.004 80);
+  --card-foreground: var(--foreground);
+  --popover: oklch(0.18 0.004 80);
+  --popover-foreground: var(--foreground);
+  --primary: oklch(0.7 0.19 38);
+  --primary-foreground: oklch(0.14 0.02 40);
+  --secondary: oklch(0.2 0.004 80);
+  --secondary-foreground: oklch(0.92 0.004 80);
+  --muted: oklch(0.19 0.004 80);
+  --muted-foreground: oklch(0.64 0.008 80);
+  --accent: oklch(0.23 0.005 80);
+  --accent-foreground: oklch(0.96 0.004 80);
+  --destructive: oklch(0.66 0.2 25);
+  --border: oklch(0.24 0.005 80);
+  --input: oklch(0.28 0.006 80);
+  --ring: oklch(0.7 0.19 38 / 0.55);
+  --sidebar: oklch(0.08 0.002 80);
+  --folder: oklch(0.76 0.12 75);
+  --success: oklch(0.72 0.14 155);
+  --warning: oklch(0.8 0.14 75);
+  --grain-opacity: 0;
+  color-scheme: dark;
+}
+
+:root {
+  /* Heights of the docked bars, used to keep content clear of them. */
+  --bottom-nav-h: calc(62px + env(safe-area-inset-bottom));
+  --player-h: 0px;
+}
+@media (min-width: 768px) {
+  :root {
+    --bottom-nav-h: 0px;
+  }
+}
+
+@theme inline {
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", "Instrument Sans Variable", ui-sans-serif, sans-serif;
+  --font-mono: "JetBrains Mono Variable", ui-monospace, monospace;
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-sidebar: var(--sidebar);
+  --color-folder: var(--folder);
+  --color-success: var(--success);
+  --color-warning: var(--warning);
+
+  --animate-rise: rise 0.38s cubic-bezier(0.2, 0.8, 0.2, 1) both;
+  --animate-march: march 0.6s linear infinite;
+
+  @keyframes rise {
+    from { opacity: 0; transform: translateY(6px) scale(0.985); }
+    to { opacity: 1; transform: none; }
+  }
+  @keyframes march {
+    to { background-position: 24px 0; }
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  html {
+    -webkit-tap-highlight-color: transparent;
+    text-size-adjust: 100%;
+  }
+  body {
+    @apply bg-background text-foreground font-sans antialiased;
+    font-feature-settings: "ss01", "cv11";
+    overscroll-behavior-y: none;
+  }
+  /* Fine paper grain, painted once behind everything. */
+  body::before {
+    content: "";
+    position: fixed;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    opacity: var(--grain-opacity);
+    background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.85' numOctaves='2' stitchTiles='stitch'/%3E%3CfeColorMatrix values='0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 0 .09 0'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E");
+  }
+  #root {
+    position: relative;
+    z-index: 1;
+  }
+  button:not(:disabled),
+  [role="button"]:not(:disabled) {
+    cursor: pointer;
+  }
+  ::selection {
+    background: color-mix(in oklch, var(--primary) 30%, transparent);
+  }
+}
+
+@utility font-display {
+  font-family: var(--font-display);
+  font-optical-sizing: auto;
+  letter-spacing: -0.02em;
+}
+
+@utility tabular {
+  font-variant-numeric: tabular-nums;
+}
+
+@utility scrollbar-thin {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in oklch, var(--muted-foreground) 35%, transparent) transparent;
+}
+
+@utility pb-safe {
+  padding-bottom: env(safe-area-inset-bottom);
+}
+
+@utility pt-safe {
+  padding-top: env(safe-area-inset-top);
+}
+
+/* Offscreen cards skip layout and paint: keeps long folders and link lists smooth. */
+@utility cv-auto {
+  content-visibility: auto;
+  contain-intrinsic-size: auto 200px;
+}
