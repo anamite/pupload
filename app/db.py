@@ -13,7 +13,7 @@ import json
 import sqlite3
 import threading
 import time
-from typing import Any, Dict, Iterable, List, Optional
+from typing import Any, Callable, Dict, Iterable, List, Optional
 
 from .config import DATA_DIR
 
@@ -22,7 +22,8 @@ DB_PATH = DATA_DIR / "pupload.db"
 _local = threading.local()
 _write_lock = threading.Lock()
 
-SCHEMA = """
+# The original (v1) table. Everything after it is a numbered migration.
+BASE_SCHEMA = """
 CREATE TABLE IF NOT EXISTS meta (
     path        TEXT PRIMARY KEY,
     created_at  REAL NOT NULL,
@@ -32,43 +33,93 @@ CREATE TABLE IF NOT EXISTS meta (
     downloads   INTEGER NOT NULL DEFAULT 0
 );
 CREATE INDEX IF NOT EXISTS idx_meta_created ON meta(created_at);
-
-CREATE TABLE IF NOT EXISTS links (
-    id          INTEGER PRIMARY KEY AUTOINCREMENT,
-    url         TEXT NOT NULL,
-    title       TEXT NOT NULL DEFAULT '',
-    note        TEXT NOT NULL DEFAULT '',
-    tags        TEXT NOT NULL DEFAULT '[]',
-    pinned      INTEGER NOT NULL DEFAULT 0,
-    created_at  REAL NOT NULL,
-    updated_at  REAL NOT NULL,
-    device_id   TEXT NOT NULL DEFAULT '',
-    device_name TEXT NOT NULL DEFAULT '',
-    device_ip   TEXT NOT NULL DEFAULT ''
-);
-
-CREATE TABLE IF NOT EXISTS trash (
-    id          TEXT PRIMARY KEY,
-    kind        TEXT NOT NULL,            -- file | folder | link
-    name        TEXT NOT NULL,
-    original    TEXT NOT NULL DEFAULT '', -- relative path it was deleted from
-    blob        TEXT NOT NULL DEFAULT '', -- absolute path of the stored copy
-    size        INTEGER NOT NULL DEFAULT 0,
-    items       INTEGER NOT NULL DEFAULT 0,
-    deleted_at  REAL NOT NULL,
-    deleted_by  TEXT NOT NULL DEFAULT '',
-    payload     TEXT NOT NULL DEFAULT '{}'
-);
-CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at);
 """
 
-# Columns added after the first release; added in place on older databases.
-META_COLUMNS = {
-    "device_id": "TEXT NOT NULL DEFAULT ''",
-    "device_name": "TEXT NOT NULL DEFAULT ''",
-    "device_ip": "TEXT NOT NULL DEFAULT ''",
-    "expiry_from": "REAL",
-}
+
+def _add_column(cx: sqlite3.Connection, table: str, name: str, decl: str) -> None:
+    have = {row[1] for row in cx.execute(f"PRAGMA table_info({table})")}
+    if name not in have:
+        cx.execute(f"ALTER TABLE {table} ADD COLUMN {name} {decl}")
+
+
+def _m1_devices_links_trash(cx: sqlite3.Connection) -> None:
+    """2.0: uploader device on files, saved links, recycle bin."""
+    for name, decl in (("device_id", "TEXT NOT NULL DEFAULT ''"),
+                       ("device_name", "TEXT NOT NULL DEFAULT ''"),
+                       ("device_ip", "TEXT NOT NULL DEFAULT ''"),
+                       ("expiry_from", "REAL")):
+        _add_column(cx, "meta", name, decl)
+    cx.executescript("""
+    CREATE TABLE IF NOT EXISTS links (
+        id          INTEGER PRIMARY KEY AUTOINCREMENT,
+        url         TEXT NOT NULL,
+        title       TEXT NOT NULL DEFAULT '',
+        note        TEXT NOT NULL DEFAULT '',
+        tags        TEXT NOT NULL DEFAULT '[]',
+        pinned      INTEGER NOT NULL DEFAULT 0,
+        created_at  REAL NOT NULL,
+        updated_at  REAL NOT NULL,
+        device_id   TEXT NOT NULL DEFAULT '',
+        device_name TEXT NOT NULL DEFAULT '',
+        device_ip   TEXT NOT NULL DEFAULT ''
+    );
+    CREATE TABLE IF NOT EXISTS trash (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,            -- file | folder | link
+        name        TEXT NOT NULL,
+        original    TEXT NOT NULL DEFAULT '', -- relative path it was deleted from
+        blob        TEXT NOT NULL DEFAULT '', -- absolute path of the stored copy
+        size        INTEGER NOT NULL DEFAULT 0,
+        items       INTEGER NOT NULL DEFAULT 0,
+        deleted_at  REAL NOT NULL,
+        deleted_by  TEXT NOT NULL DEFAULT '',
+        payload     TEXT NOT NULL DEFAULT '{}'
+    );
+    CREATE INDEX IF NOT EXISTS idx_trash_deleted ON trash(deleted_at);
+    CREATE INDEX IF NOT EXISTS idx_meta_device ON meta(device_id);
+    """)
+
+
+# Schema changes, applied in order exactly once and recorded in PRAGMA
+# user_version. To change the schema: append a function here — never edit or
+# reorder an existing one. Each must be safe on a database that already has
+# the change (use _add_column / IF NOT EXISTS).
+MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [
+    _m1_devices_links_trash,
+]
+SCHEMA_VERSION = len(MIGRATIONS)
+
+
+def _backup(cx: sqlite3.Connection, label: str) -> None:
+    """Consistent copy of the database into data/backups (keeps the last 10)."""
+    folder = DATA_DIR / "backups"
+    folder.mkdir(parents=True, exist_ok=True)
+    dest = sqlite3.connect(str(folder / f"pupload-{time.strftime('%Y%m%d-%H%M%S')}-{label}.db"))
+    try:
+        cx.backup(dest)
+    finally:
+        dest.close()
+    for old in sorted(folder.glob("pupload-*.db"))[:-10]:
+        try:
+            old.unlink()
+        except OSError:
+            pass
+
+
+def _migrate(cx: sqlite3.Connection) -> None:
+    cx.executescript(BASE_SCHEMA)
+    version = cx.execute("PRAGMA user_version").fetchone()[0]
+    if version >= SCHEMA_VERSION:
+        return
+    has_data = cx.execute("SELECT EXISTS (SELECT 1 FROM meta)").fetchone()[0]
+    if has_data or version:
+        _backup(cx, f"before-schema-{SCHEMA_VERSION}")
+    for number, step in enumerate(MIGRATIONS, start=1):
+        if number <= version:
+            continue
+        with cx:  # each step commits on its own, so a failure leaves a known version
+            step(cx)
+            cx.execute(f"PRAGMA user_version = {number}")
 
 
 def conn() -> sqlite3.Connection:
@@ -80,12 +131,8 @@ def conn() -> sqlite3.Connection:
     cx.row_factory = sqlite3.Row
     cx.execute("PRAGMA journal_mode=WAL")
     cx.execute("PRAGMA synchronous=NORMAL")
-    cx.executescript(SCHEMA)
-    have = {row["name"] for row in cx.execute("PRAGMA table_info(meta)")}
-    for name, decl in META_COLUMNS.items():
-        if name not in have:
-            cx.execute(f"ALTER TABLE meta ADD COLUMN {name} {decl}")
-    cx.commit()
+    with _write_lock:
+        _migrate(cx)
     _local.conn = cx
     return cx
 

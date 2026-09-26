@@ -18,6 +18,7 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { useConfig, useStats } from "@/lib/queries";
 import { useRoute } from "@/lib/router";
 import { applyTheme, savedTheme } from "@/lib/theme";
+import { useUpdateNotice } from "@/lib/update-check";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -40,6 +41,7 @@ function Shell() {
   const route = useRoute();
   const { setQuery } = useApp();
   const [shared] = React.useState(takeSharedLink);
+  useUpdateNotice();
 
   // A search belongs to the view it was typed in.
   React.useEffect(() => {

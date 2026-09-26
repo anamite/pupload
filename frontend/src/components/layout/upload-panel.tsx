@@ -9,7 +9,8 @@ import { cn } from "@/lib/utils";
 export function UploadPanel() {
   const jobs = useUploads();
   const [collapsed, setCollapsed] = React.useState(false);
-  const pending = jobs.filter((j) => j.status === "queued" || j.status === "uploading");
+  const pending = jobs.filter((j) => j.status === "queued" || j.status === "uploading" || j.status === "waiting");
+  const waiting = jobs.some((j) => j.status === "waiting");
   const failed = jobs.filter((j) => j.status === "error");
 
   // Tidy away finished batches without errors.
@@ -24,7 +25,9 @@ export function UploadPanel() {
   const total = jobs.filter((j) => j.status !== "canceled").reduce((a, j) => a + j.file.size, 0);
   const done = jobs.filter((j) => j.status !== "canceled").reduce((a, j) => a + (j.status === "done" ? j.file.size : j.loaded), 0);
   const pct = total ? Math.round((done / total) * 100) : 100;
-  const title = pending.length
+  const title = waiting
+    ? "Reconnecting…"
+    : pending.length
     ? `Uploading ${pending.length} file${pending.length === 1 ? "" : "s"}`
     : failed.length
       ? `${failed.length} upload${failed.length === 1 ? "" : "s"} failed`
@@ -76,8 +79,19 @@ function JobRow({ job }: { job: UploadJob }) {
     <div className="flex items-center gap-3 px-4 py-2">
       <div className="min-w-0 flex-1">
         <div className="truncate text-sm">{job.dir ? `${job.dir}/${job.file.name}` : job.file.name}</div>
-        {job.status === "uploading" || job.status === "queued" ? (
-          <Progress value={job.status === "queued" ? 0 : pct} className="mt-1.5 h-1" />
+        {job.status === "uploading" || job.status === "queued" || job.status === "waiting" ? (
+          <>
+            <Progress
+              value={job.status === "queued" ? 0 : pct}
+              className="mt-1.5 h-1"
+              indicatorClassName={job.status === "waiting" ? "bg-warning" : undefined}
+            />
+            {(job.note || job.resumed) && (
+              <div className={cn("mt-1 text-[11px]", job.status === "waiting" ? "text-foreground" : "text-muted-foreground")}>
+                {job.note ?? `Resumed at ${fmtSize(job.loaded)}`}
+              </div>
+            )}
+          </>
         ) : (
           <div
             className={cn(
@@ -102,7 +116,7 @@ function JobRow({ job }: { job: UploadJob }) {
           </Button>
         </>
       )}
-      {(job.status === "uploading" || job.status === "queued") && (
+      {(job.status === "uploading" || job.status === "queued" || job.status === "waiting") && (
         <Button variant="ghost" size="icon-sm" onClick={() => uploads.cancel(job.id)} aria-label="Cancel upload">
           <X />
         </Button>

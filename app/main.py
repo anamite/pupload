@@ -13,10 +13,10 @@ import time
 import urllib.parse
 import zipfile
 from pathlib import Path
-from typing import Any, Dict, Iterator, List, Optional
+from typing import Any, AsyncIterator, Dict, Iterator, List, Optional
 
 from starlette.applications import Starlette
-from starlette.requests import Request
+from starlette.requests import ClientDisconnect, Request
 from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, Response,
                                  StreamingResponse)
 from starlette.routing import Mount, Route
@@ -34,6 +34,11 @@ SWEEP_INTERVAL = 30 * 60
 
 _RANGE_RE = re.compile(r"bytes=(\d*)-(\d*)")
 _DEVICE_ID_RE = re.compile(r"[^A-Za-z0-9_-]")
+_UPLOAD_ID_RE = re.compile(r"^[a-f0-9]{16,64}$")
+# A sender that goes quiet this long (phone asleep, Wi-Fi gone) is dropped, so
+# a dead connection never holds an upload open for hours.
+IDLE_TIMEOUT = 60
+_upload_locks: Dict[str, asyncio.Lock] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -200,7 +205,7 @@ def zip_stream(targets: List[Path]) -> Iterator[bytes]:
                 yield from _zip_file(zf, sink, target, top)
                 continue
             for dirpath, dirnames, filenames in os.walk(str(target)):
-                dirnames[:] = [d for d in dirnames if d != storage.TRASH_DIRNAME]
+                dirnames[:] = [d for d in dirnames if d not in storage.INTERNAL_DIRS]
                 dirnames.sort(key=str.lower)
                 for name in sorted(filenames, key=str.lower):
                     src = Path(dirpath) / name
@@ -238,7 +243,7 @@ class WebFiles(StaticFiles):
         response = await super().get_response(path, scope)
         if path.startswith("assets/") and response.status_code == 200:
             response.headers["Cache-Control"] = "public, max-age=31536000, immutable"
-        elif path in ("sw.js", "manifest.webmanifest"):
+        elif path in ("sw.js", "manifest.webmanifest", "build-info.json"):
             response.headers["Cache-Control"] = "no-cache"
         return response
 
@@ -246,6 +251,11 @@ class WebFiles(StaticFiles):
 # ---------------------------------------------------------------------------
 # Routes: settings
 # ---------------------------------------------------------------------------
+
+async def api_ping(request: Request) -> Response:
+    """Lets the installer tell pupload apart from other programs on a port."""
+    return ok({"app": "pupload", "version": __version__})
+
 
 async def api_config(request: Request) -> Response:
     return ok({"settings": config.load(), "stats": storage.stats(), "version": __version__})
@@ -334,39 +344,167 @@ async def api_mkdir(request: Request) -> Response:
     return ok({"item": storage.entry(target, config.load())})
 
 
-async def api_upload(request: Request) -> Response:
-    """Raw-body upload: the browser streams one file per request.
+def upload_folder(params: Any, create: bool) -> Path:
+    """Target folder for an upload, including a dropped directory's sub-path."""
+    folder = storage.safe_join(params.get("path", ""))
+    sub = str(params.get("dir", "")).replace("\\", "/").strip("/")
+    if sub:
+        parts = [storage.clean_name(p) for p in sub.split("/") if p not in ("", ".", "..")]
+        folder = storage.safe_join("/".join(filter(None, [storage.rel_of(folder), *parts])))
+        if create:
+            folder.mkdir(parents=True, exist_ok=True)
+    return folder
 
-    Avoids multipart parsing entirely, so nothing is buffered twice and a
-    4 GB video costs the Pi the same memory as a 4 KB note.
+
+async def body_chunks(request: Request) -> AsyncIterator[bytes]:
+    """The request body, giving up if the sender stalls for IDLE_TIMEOUT seconds."""
+    stream = request.stream().__aiter__()
+    while True:
+        try:
+            chunk = await asyncio.wait_for(stream.__anext__(), IDLE_TIMEOUT)
+        except StopAsyncIteration:
+            return
+        if chunk:
+            yield chunk
+
+
+async def discard_body(request: Request) -> None:
+    """Read and drop an unwanted body, so the client gets our reply instead of
+    a reset connection (a browser would report that as a network error)."""
+    try:
+        async for _ in body_chunks(request):
+            pass
+    except Exception:
+        pass
+
+
+def room_for(remaining: int) -> Optional[str]:
+    """Why `remaining` more bytes cannot be stored, or None if they fit."""
+    cfg = config.load()
+    info = storage.usage()
+    quota = cfg["quota_bytes"]
+    if quota is not None and info["bytes"] + remaining > quota:
+        hint = " (emptying the recycle bin frees space)" if info["trash"] else ""
+        return "Storage limit reached" + hint
+    if remaining > storage.disk()["free"] - cfg["keep_free_bytes"]:
+        return "Not enough space on the disk"
+    return None
+
+
+async def api_upload_chunk(request: Request) -> Response:
+    """Resumable upload: the browser sends a file in pieces, each at an offset.
+
+    Pieces are appended to `<storage>/.pupload-uploads/<id>.part`. If the
+    connection drops, the browser asks how much arrived and continues from
+    there — even after a page reload, as the id is derived from the file. The
+    file only appears in its folder once the last byte is in, and unfinished
+    uploads are cleaned away after a day.
     """
     params = request.query_params
-    name = storage.clean_name(urllib.parse.unquote(params.get("name", "")))
+    upload_id = params.get("id", "")
+    if not _UPLOAD_ID_RE.match(upload_id):
+        return fail("Bad upload id")
     try:
-        folder = storage.safe_join(params.get("path", ""))
-        # An upload may carry a relative folder path (drag-dropped directory).
-        sub = str(params.get("dir", "")).replace("\\", "/").strip("/")
-        if sub:
-            parts = [storage.clean_name(p) for p in sub.split("/") if p not in ("", ".", "..")]
-            folder = storage.safe_join("/".join(filter(None, [storage.rel_of(folder), *parts])))
-            folder.mkdir(parents=True, exist_ok=True)
+        total = int(params.get("size", ""))
+        offset = int(params.get("offset", ""))
+    except ValueError:
+        return fail("Bad size or offset")
+    if total < 0 or offset < 0 or offset > total:
+        return fail("Bad size or offset")
+    try:
+        upload_folder(params, create=False)       # reject a bad target before taking data
+    except StorageError as exc:
+        return fail(str(exc))
+
+    part = storage.uploads_dir() / f"{upload_id}.part"
+    lock = _upload_locks.setdefault(upload_id, asyncio.Lock())
+    async with lock:
+        have = part.stat().st_size if part.exists() else 0
+        if offset != have:
+            await discard_body(request)
+            return JSONResponse({"ok": False, "error": "Resuming from the server's copy", "offset": have},
+                                status_code=409)
+        problem = room_for(total - have)
+        if problem:
+            await discard_body(request)
+            return fail(problem, 413)
+
+        written = 0
+        try:
+            with open(part, "ab") as fh:
+                async for chunk in body_chunks(request):
+                    if have + written + len(chunk) > total:
+                        return fail("More data than the file size", 400)
+                    fh.write(chunk)
+                    written += len(chunk)
+        except (asyncio.TimeoutError, ClientDisconnect, OSError):
+            storage.invalidate_usage()
+            return JSONResponse({"ok": False, "error": "Upload interrupted", "offset": have + written},
+                                status_code=408)
+        storage.invalidate_usage()
+
+        done = have + written
+        if done < total:
+            return ok({"done": False, "offset": done})
+
+        try:
+            folder = upload_folder(params, create=True)
+            if not folder.is_dir():
+                return fail("Folder not found", 404)
+            name = storage.clean_name(params.get("name", ""))
+            target = storage.unique_path(folder, name)
+            os.replace(part, target)
+        except StorageError as exc:
+            return fail(str(exc))
+        except OSError as exc:
+            return fail(f"Could not save file: {exc.strerror or exc}")
+        _upload_locks.pop(upload_id, None)
+
+    db.touch(storage.rel_of(target), total, device=device_of(request))
+    storage.invalidate_usage()
+    return ok({"done": True, "offset": total, "item": storage.entry(target, config.load()),
+               "stats": storage.stats()})
+
+
+async def api_upload_status(request: Request) -> Response:
+    upload_id = request.query_params.get("id", "")
+    if not _UPLOAD_ID_RE.match(upload_id):
+        return fail("Bad upload id")
+    part = storage.uploads_dir() / f"{upload_id}.part"
+    return ok({"offset": part.stat().st_size if part.exists() else 0})
+
+
+async def api_upload_cancel(request: Request) -> Response:
+    data = await body_json(request)
+    upload_id = str(data.get("id", ""))
+    if not _UPLOAD_ID_RE.match(upload_id):
+        return fail("Bad upload id")
+    (storage.uploads_dir() / f"{upload_id}.part").unlink(missing_ok=True)
+    _upload_locks.pop(upload_id, None)
+    storage.invalidate_usage()
+    return ok()
+
+
+async def api_upload(request: Request) -> Response:
+    """Single-request upload of a whole file (handy for curl and scripts).
+
+    The browser uses the resumable /api/upload/chunk instead.
+    """
+    params = request.query_params
+    try:
+        folder = upload_folder(params, create=True)
     except StorageError as exc:
         return fail(str(exc))
     if not folder.is_dir():
         return fail("Folder not found", 404)
 
     declared = int(request.headers.get("content-length") or 0)
-    try:
-        storage.check_room(declared)
-    except StorageError as exc:
-        return fail(str(exc), 413)
+    problem = room_for(declared)
+    if problem:
+        return fail(problem, 413)
 
-    if params.get("overwrite") == "1":
-        target = folder / name
-    else:
-        target = storage.unique_path(folder, name)
-    partial = target.with_name(target.name + storage.PART_SUFFIX)
-
+    name = storage.clean_name(params.get("name", ""))
+    part = storage.uploads_dir() / f"single-{os.getpid()}-{time.time_ns()}.part"
     cfg = config.load()
     quota = cfg["quota_bytes"]
     used = storage.usage()["bytes"]
@@ -374,10 +512,8 @@ async def api_upload(request: Request) -> Response:
     written = 0
 
     try:
-        with open(partial, "wb") as fh:
-            async for chunk in request.stream():
-                if not chunk:
-                    continue
+        with open(part, "wb") as fh:
+            async for chunk in body_chunks(request):
                 written += len(chunk)
                 if quota is not None and used + written > quota:
                     raise StorageError("Storage limit reached")
@@ -385,20 +521,21 @@ async def api_upload(request: Request) -> Response:
                     raise StorageError("Not enough space on the disk")
                 fh.write(chunk)
     except StorageError as exc:
-        partial.unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         return fail(str(exc), 413)
     except Exception:
-        partial.unlink(missing_ok=True)
+        # Disconnect, stall or disk error: nothing half-written is left behind.
+        part.unlink(missing_ok=True)
         return fail("Upload failed", 500)
 
+    target = storage.unique_path(folder, name)
     try:
-        partial.replace(target)
+        os.replace(part, target)
     except OSError as exc:
-        partial.unlink(missing_ok=True)
+        part.unlink(missing_ok=True)
         return fail(f"Could not save file: {exc.strerror or exc}")
 
-    rel = storage.rel_of(target)
-    db.touch(rel, written, device=device_of(request))
+    db.touch(storage.rel_of(target), written, device=device_of(request))
     storage.invalidate_usage()
     return ok({"item": storage.entry(target, cfg), "stats": storage.stats()})
 
@@ -732,6 +869,7 @@ async def lifespan(_app: Starlette):
 routes: List[Any] = [
     Route("/", index),
     Route("/share", index),   # PWA share target: links shared from other apps
+    Route("/api/ping", api_ping),
     Route("/api/config", api_config),
     Route("/api/settings", api_settings, methods=["POST", "PUT"]),
     Route("/api/storage-options", api_storage_options),
@@ -742,6 +880,9 @@ routes: List[Any] = [
     Route("/api/folders", api_folders),
     Route("/api/mkdir", api_mkdir, methods=["POST"]),
     Route("/api/upload", api_upload, methods=["POST", "PUT"]),
+    Route("/api/upload/chunk", api_upload_chunk, methods=["POST", "PUT"]),
+    Route("/api/upload/status", api_upload_status),
+    Route("/api/upload/cancel", api_upload_cancel, methods=["POST"]),
     Route("/api/rename", api_rename, methods=["POST"]),
     Route("/api/move", api_move, methods=["POST"]),
     Route("/api/delete", api_delete, methods=["POST"]),

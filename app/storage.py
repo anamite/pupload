@@ -18,6 +18,11 @@ PART_SUFFIX = ".pupload-part"
 # Recycle bin lives inside the storage root so deleting is a cheap rename on
 # the same disk. It is never listed, searched, browsed or zipped.
 TRASH_DIRNAME = ".pupload-trash"
+# Uploads in progress are assembled here and only moved into place once
+# complete, so a dropped connection never leaves a half file in a folder.
+UPLOADS_DIRNAME = ".pupload-uploads"
+INTERNAL_DIRS = frozenset({TRASH_DIRNAME, UPLOADS_DIRNAME})
+UPLOAD_KEEP_SECONDS = 24 * 3600   # unfinished uploads can be resumed for a day
 
 KINDS: Dict[str, Tuple[str, ...]] = {
     "image": ("jpg", "jpeg", "png", "gif", "webp", "bmp", "svg", "avif", "heic", "ico", "tiff"),
@@ -62,7 +67,7 @@ def clean_name(name: str) -> str:
     name = _BAD_CHARS.sub("_", name).strip(" .")
     if name in ("", ".", ".."):
         name = "untitled"
-    if name.endswith(PART_SUFFIX) or name == TRASH_DIRNAME:
+    if name.endswith(PART_SUFFIX) or name in INTERNAL_DIRS:
         name += "_"
     return name[:180]
 
@@ -80,7 +85,7 @@ def safe_join(rel: str) -> Path:
         if part == "..":
             raise StorageError("Invalid path")
         parts.append(part)
-    if parts and parts[0] == TRASH_DIRNAME:
+    if parts and parts[0] in INTERNAL_DIRS:
         raise StorageError("Invalid path")
     target = Path(os.path.realpath(str(base.joinpath(*parts))))
     base_real = Path(os.path.realpath(str(base)))
@@ -139,12 +144,12 @@ def is_hidden(path: Path) -> bool:
 
 def is_internal(path: Path) -> bool:
     """Things that are never shown, even with 'show hidden files' on."""
-    return path.name == TRASH_DIRNAME or path.name.endswith(PART_SUFFIX)
+    return path.name in INTERNAL_DIRS or path.name.endswith(PART_SUFFIX)
 
 
 def keep_dirs(dirnames: List[str], show_hidden: bool) -> List[str]:
     return [d for d in dirnames
-            if d != TRASH_DIRNAME and (show_hidden or not d.startswith("."))]
+            if d not in INTERNAL_DIRS and (show_hidden or not d.startswith("."))]
 
 
 # ---------------------------------------------------------------------------
@@ -348,10 +353,10 @@ def invalidate_usage() -> None:
 
 
 def tree_size(base: str) -> Tuple[int, int, int]:
-    """(bytes, files, folders) below `base`, skipping the recycle bin."""
+    """(bytes, files, folders) below `base`, skipping the recycle bin and upload staging."""
     total = files = folders = 0
     for dirpath, dirnames, filenames in os.walk(base):
-        dirnames[:] = [d for d in dirnames if d != TRASH_DIRNAME]
+        dirnames[:] = [d for d in dirnames if d not in INTERNAL_DIRS]
         folders += len(dirnames)
         for name in filenames:
             try:
@@ -363,7 +368,8 @@ def tree_size(base: str) -> Tuple[int, int, int]:
 
 
 def usage(force: bool = False) -> Dict[str, int]:
-    """Bytes used. `bytes` includes the recycle bin, which still occupies the disk."""
+    """Bytes used. `bytes` includes the recycle bin and unfinished uploads,
+    which still occupy the disk."""
     base = str(root())
     keys = ("bytes", "files", "folders", "trash")
     with _usage_lock:
@@ -375,7 +381,8 @@ def usage(force: bool = False) -> Dict[str, int]:
 
     live, files, folders = tree_size(base)
     binned = tree_size(os.path.join(base, TRASH_DIRNAME))[0]
-    result = {"bytes": live + binned, "files": files, "folders": folders, "trash": binned}
+    staging = tree_size(os.path.join(base, UPLOADS_DIRNAME))[0]
+    result = {"bytes": live + binned + staging, "files": files, "folders": folders, "trash": binned}
 
     with _usage_lock:
         _usage_cache.update({"root": base, "at": time.time(), **result})
@@ -434,7 +441,7 @@ def check_room(incoming: int) -> None:
 def all_folders() -> set:
     out = set()
     for dirpath, dirnames, _files in os.walk(str(root())):
-        dirnames[:] = [d for d in dirnames if d != TRASH_DIRNAME]
+        dirnames[:] = [d for d in dirnames if d not in INTERNAL_DIRS]
         for name in dirnames:
             out.add(rel_of(Path(dirpath) / name))
     return out
@@ -474,18 +481,49 @@ def sweep() -> Dict[str, Any]:
     known |= all_folders()
     db.prune([p for p in db.all_paths() if p not in known])
     purged = trash.purge_old()
-    if removed or purged["count"]:
+    stale = cleanup_partials(max_age=UPLOAD_KEEP_SECONDS)
+    if removed or purged["count"] or stale:
         invalidate_usage()
     return {"removed": removed, "count": len(removed), "binned_bytes": binned,
             "purged": purged["count"], "freed": purged["bytes"]}
 
 
-def cleanup_partials() -> None:
-    """Drop half-finished uploads left behind by an interrupted transfer."""
-    for dirpath, _dirnames, filenames in os.walk(str(root())):
+def uploads_dir() -> Path:
+    path = root() / UPLOADS_DIRNAME
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
+def cleanup_partials(max_age: float = 0) -> int:
+    """Remove unfinished uploads nobody has touched for `max_age` seconds.
+
+    With max_age=0 (server start) only legacy in-folder `.pupload-part` files
+    go: their upload died with the old process. Staged resumable uploads are
+    kept so the browser can pick up where it left off.
+    """
+    now = time.time()
+    removed = 0
+    staging = root() / UPLOADS_DIRNAME
+    if max_age and staging.is_dir():
+        for entry in os.scandir(staging):
+            try:
+                if entry.is_file() and now - entry.stat().st_mtime > max_age:
+                    os.unlink(entry.path)
+                    removed += 1
+            except OSError:
+                continue
+    for dirpath, dirnames, filenames in os.walk(str(root())):
+        dirnames[:] = [d for d in dirnames if d not in INTERNAL_DIRS]
         for name in filenames:
-            if name.endswith(PART_SUFFIX):
-                try:
-                    (Path(dirpath) / name).unlink()
-                except OSError:
-                    pass
+            if not name.endswith(PART_SUFFIX):
+                continue
+            path = Path(dirpath) / name
+            try:
+                if not max_age or now - path.stat().st_mtime > 3600:
+                    path.unlink()
+                    removed += 1
+            except OSError:
+                pass
+    if removed:
+        invalidate_usage()
+    return removed
