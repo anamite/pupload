@@ -160,6 +160,7 @@
   }
   body {
     @apply bg-background text-foreground font-sans antialiased;
+    overflow-x: clip;
     font-feature-settings: "ss01", "cv11";
     overscroll-behavior-y: none;
   }

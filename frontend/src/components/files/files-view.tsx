@@ -331,7 +331,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
         ) : items.length === 0 ? (
           <FilesEmpty view={view} searching={searching} canCreate={canCreate} onUpload={() => fileInput.current?.click()} />
         ) : layout === "grid" ? (
-          <div className="grid gap-6">
+          <div className="grid grid-cols-1 gap-6">
             {folders.length > 0 && (
               <section>
                 {files.length > 0 && <SectionLabel>Folders</SectionLabel>}
@@ -368,7 +368,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
           <DropdownMenuTrigger asChild>
             <button
               aria-label="Add"
-              className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_8px_24px_-6px_var(--primary)] transition-transform active:scale-95 data-[state=open]:rotate-45"
+              className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground transition-transform active:scale-95 data-[state=open]:rotate-45"
               style={{ bottom: "calc(var(--bottom-nav-h) + var(--player-h, 0px) + 1rem)" }}
             >
               <Plus className="size-6" strokeWidth={2.4} />

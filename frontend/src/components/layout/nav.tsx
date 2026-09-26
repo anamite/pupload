@@ -29,7 +29,7 @@ export function BrandMark({ className }: { className?: string }) {
   return (
     <span
       className={cn(
-        "relative inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-[11px] bg-primary text-primary-foreground shadow-[inset_0_1px_0_rgb(255_255_255/0.3),0_2px_8px_-2px_var(--primary)]",
+        "relative inline-flex size-9 shrink-0 items-center justify-center overflow-hidden rounded-[11px] bg-primary text-primary-foreground",
         className,
       )}
     >
@@ -144,7 +144,7 @@ export function StorageGauge({ compact = false }: { compact?: boolean }) {
               style={{ animationDelay: `${i * 14}ms` }}
               className={cn(
                 "flex-1 rounded-[3px] transition-colors duration-500 animate-in fade-in-0 fill-mode-both",
-                on ? (isBin ? `${tone} opacity-40` : `${tone} shadow-[0_0_6px_-1px_var(--primary)]`) : "bg-muted-foreground/12",
+                on ? (isBin ? `${tone} opacity-40` : tone) : "bg-muted-foreground/12",
               )}
             />
           );

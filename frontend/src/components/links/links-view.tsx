@@ -144,7 +144,7 @@ export function LinksView({ shared }: { shared?: Partial<Draft> | null }) {
         count={isLoading ? undefined : links.length}
       />
 
-      <div className="grid gap-3 px-4 pb-4 sm:px-6 lg:px-8">
+      <div className="grid grid-cols-1 gap-3 px-4 pb-4 sm:px-6 lg:px-8">
         <form
           className="flex gap-2"
           onSubmit={async (e) => {
@@ -208,7 +208,7 @@ export function LinksView({ shared }: { shared?: Partial<Draft> | null }) {
 
       <div className="flex-1 px-4 pb-6 sm:px-6 lg:px-8">
         {isLoading ? (
-          <div className="grid gap-2.5 md:grid-cols-2 2xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 2xl:grid-cols-3">
             {Array.from({ length: 6 }, (_, i) => (
               <Skeleton key={i} className="h-24" />
             ))}
@@ -220,7 +220,7 @@ export function LinksView({ shared }: { shared?: Partial<Draft> | null }) {
             <EmptyState icon={Search} title="No matching links" text="Try another word or tag." />
           )
         ) : (
-          <div className="grid gap-2.5 md:grid-cols-2 2xl:grid-cols-3">
+          <div className="grid grid-cols-1 gap-2.5 md:grid-cols-2 2xl:grid-cols-3">
             {shown.map((link, i) => (
               <LinkCard
                 key={link.id}
@@ -240,7 +240,7 @@ export function LinksView({ shared }: { shared?: Partial<Draft> | null }) {
         <button
           aria-label="Add link"
           onClick={() => setDraft({ ...EMPTY })}
-          className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground shadow-[0_8px_24px_-6px_var(--primary)] transition-transform active:scale-95"
+          className="fixed right-4 z-30 flex size-14 items-center justify-center rounded-2xl bg-primary text-primary-foreground transition-transform active:scale-95"
           style={{ bottom: "calc(var(--bottom-nav-h) + var(--player-h, 0px) + 1rem)" }}
         >
           <Plus className="size-6" strokeWidth={2.4} />
@@ -287,7 +287,7 @@ function LinkCard({
     <article
       style={{ animationDelay: `${Math.min(index, 14) * 22}ms` }}
       className={cn(
-        "group relative flex animate-rise gap-3 rounded-xl border bg-card p-3 pr-1.5 transition-[border-color,box-shadow] cv-auto [contain-intrinsic-size:auto_96px] hover:border-foreground/15 hover:shadow-md sm:p-4 sm:pr-2",
+        "group relative flex min-w-0 animate-rise gap-3 overflow-hidden rounded-xl border bg-card p-3 pr-1.5 transition-[border-color,box-shadow] cv-auto [contain-intrinsic-size:auto_96px] hover:border-foreground/15 hover:shadow-md sm:p-4 sm:pr-2",
         link.pinned && "border-primary/35",
       )}
     >
@@ -303,12 +303,12 @@ function LinkCard({
           href={safe ? link.url : undefined}
           target="_blank"
           rel="noopener noreferrer"
-          className="line-clamp-2 text-sm leading-snug font-semibold break-words after:absolute after:inset-0 after:content-[''] hover:text-primary"
+          className="line-clamp-2 text-sm leading-snug font-semibold [overflow-wrap:anywhere] after:absolute after:inset-0 after:content-[''] hover:text-primary"
         >
           {link.title || host}
         </a>
         <div className="mt-0.5 truncate font-mono text-xs text-muted-foreground">{link.url.replace(/^https?:\/\/(www\.)?/, "")}</div>
-        {link.note && <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-line text-muted-foreground">{link.note}</p>}
+        {link.note && <p className="mt-1.5 line-clamp-3 text-sm whitespace-pre-line text-muted-foreground [overflow-wrap:anywhere]">{link.note}</p>}
         <div className="relative z-10 mt-2 flex flex-wrap items-center gap-1.5 text-[11px] text-muted-foreground">
           {link.pinned && (
             <Badge>
