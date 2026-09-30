@@ -14,16 +14,20 @@ import { useVaultUi } from "@/components/vault/vault";
 import { api, type Stats, type TrashItem } from "@/lib/api";
 import { fmtSize, fmtWhen, plural } from "@/lib/format";
 import { absorbStats, keys, refreshAll, useStats, useTrash } from "@/lib/queries";
-import { navigate } from "@/lib/router";
+import { navigate, type View } from "@/lib/router";
 import { cn } from "@/lib/utils";
 
-type Filter = "all" | "file" | "folder" | "link";
+type Filter = "all" | "file" | "folder" | "link" | "private";
 const FILTERS: { id: Filter; label: string }[] = [
   { id: "all", label: "All" },
   { id: "file", label: "Files" },
   { id: "folder", label: "Folders" },
   { id: "link", label: "Links" },
 ];
+const PRIVATE_KINDS = new Set(["note", "list", "event", "memo"]);
+/** Where a restored private record lives. */
+const PRIVATE_HOME: Record<string, View> = { note: "notes", list: "lists", event: "calendar", memo: "memos" };
+const isPrivate = (i: TrashItem) => PRIVATE_KINDS.has(i.kind);
 
 function daysLeft(purgeAt: number | null) {
   if (!purgeAt) return null;
@@ -50,7 +54,7 @@ export function BinView() {
   const needle = query.trim().toLowerCase();
   const shown = items.filter(
     (i) =>
-      (filter === "all" || i.kind === filter) &&
+      (filter === "all" || i.kind === filter || (filter === "private" && isPrivate(i))) &&
       (!needle || i.name.toLowerCase().includes(needle) || i.original.toLowerCase().includes(needle)),
   );
 
@@ -62,24 +66,33 @@ export function BinView() {
     absorbStats(qc, data);
     refreshAll(qc);
     qc.invalidateQueries({ queryKey: keys.links });
+    qc.invalidateQueries({ queryKey: keys.private });
     setSelected(new Set());
   };
 
   const restore = async (ids: string[]) => {
     setBusy(true);
     try {
-      const data = await api<{ restored: { kind: string; path: string }[]; errors: string[] }>("/api/trash/restore", { ids });
+      const data = await api<{ restored: { kind: string; path: string; id?: string }[]; errors: string[] }>("/api/trash/restore", { ids });
       after(data);
       const first = data.restored[0];
       toast.success(`${plural(data.restored.length, "item")} restored`, {
         description: data.errors[0],
         action:
-          data.restored.length === 1 && first.kind !== "link"
+          data.restored.length === 1 && PRIVATE_HOME[first.kind]
             ? {
                 label: "Show",
-                onClick: () => navigate("files", first.path.includes("/") ? first.path.slice(0, first.path.lastIndexOf("/")) : ""),
+                onClick: () => {
+                  const view = PRIVATE_HOME[first.kind];
+                  navigate(view, view === "notes" || view === "lists" ? first.id ?? "" : "");
+                },
               }
-            : undefined,
+            : data.restored.length === 1 && first.kind !== "link"
+              ? {
+                  label: "Show",
+                  onClick: () => navigate("files", first.path.includes("/") ? first.path.slice(0, first.path.lastIndexOf("/")) : ""),
+                }
+              : undefined,
       });
     } catch (err) {
       fail(err);
@@ -161,7 +174,7 @@ export function BinView() {
 
       <div className="flex flex-wrap items-center gap-1.5 px-4 pb-4 sm:px-6 lg:px-8">
         <div className="flex rounded-lg border bg-card p-0.5">
-          {FILTERS.map((f) => (
+          {[...FILTERS, ...(items.some(isPrivate) ? [{ id: "private" as Filter, label: "Private" }] : [])].map((f) => (
             <button
               key={f.id}
               onClick={() => setFilter(f.id)}
@@ -265,7 +278,13 @@ function BinRow({
 }) {
   const left = daysLeft(item.purge_at);
   const where =
-    item.kind === "link" ? item.url ?? "" : item.original.includes("/") ? `Home/${item.original.slice(0, item.original.lastIndexOf("/"))}` : "Home";
+    item.kind === "link"
+      ? item.url ?? ""
+      : isPrivate(item)
+        ? item.original
+        : item.original.includes("/")
+          ? `Home/${item.original.slice(0, item.original.lastIndexOf("/"))}`
+          : "Home";
   return (
     <div
       className={cn(

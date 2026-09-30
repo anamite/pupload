@@ -11,6 +11,7 @@ import { BrandMark, Sidebar } from "@/components/layout/nav";
 import { TopBar } from "@/components/layout/top-bar";
 import { UploadPanel } from "@/components/layout/upload-panel";
 import { LinksView } from "@/components/links/links-view";
+import { PrivateGuard, usePrivateAccess } from "@/components/private/access";
 import { AuthProvider, LoginScreen, useSignedOutWatch } from "@/components/remote/auth";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
@@ -19,9 +20,15 @@ import { TooltipProvider } from "@/components/ui/tooltip";
 import { VaultProvider } from "@/components/vault/vault";
 import type { AuthStatus } from "@/lib/api";
 import { useAuth, useConfig, useStats } from "@/lib/queries";
-import { useRoute } from "@/lib/router";
+import { PRIVATE_VIEWS, useRoute } from "@/lib/router";
 import { applyTheme, savedTheme } from "@/lib/theme";
 import { useUpdateNotice } from "@/lib/update-check";
+
+// The private space loads only on devices that can open it.
+const NotesView = React.lazy(() => import("@/components/private/notes-view").then((m) => ({ default: m.NotesView })));
+const MemosView = React.lazy(() => import("@/components/private/memos-view").then((m) => ({ default: m.MemosView })));
+const ListsView = React.lazy(() => import("@/components/private/lists-view").then((m) => ({ default: m.ListsView })));
+const CalendarView = React.lazy(() => import("@/components/private/calendar-view").then((m) => ({ default: m.CalendarView })));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -43,6 +50,7 @@ function takeSharedLink() {
 function Shell() {
   const route = useRoute();
   const { setQuery } = useApp();
+  const privateAccess = usePrivateAccess();
   const [shared] = React.useState(takeSharedLink);
   useUpdateNotice();
 
@@ -55,7 +63,12 @@ function Shell() {
   }, [route.view, route.path]);
 
   let body: React.ReactNode;
-  if (route.view === "links") body = <LinksView shared={shared} />;
+  if (PRIVATE_VIEWS.includes(route.view) && !privateAccess) body = null;
+  else if (route.view === "notes") body = <NotesView id={route.path} />;
+  else if (route.view === "memos") body = <MemosView />;
+  else if (route.view === "lists") body = <ListsView id={route.path} />;
+  else if (route.view === "calendar") body = <CalendarView />;
+  else if (route.view === "links") body = <LinksView shared={shared} />;
   else if (route.view === "bin") body = <BinView />;
   else body = <FilesView view={route.view} path={route.path} />;
 
@@ -69,13 +82,14 @@ function Shell() {
           className="flex-1 animate-in fade-in-0 duration-300"
           style={{ paddingBottom: "calc(var(--bottom-nav-h) + var(--player-h, 0px) + 5rem)" }}
         >
-          {body}
+          <React.Suspense fallback={null}>{body}</React.Suspense>
         </main>
       </div>
       <MobileNav view={route.view} />
       <AudioBar />
       <UploadPanel />
       <SettingsDialog />
+      <PrivateGuard view={route.view} />
     </div>
   );
 }

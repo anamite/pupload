@@ -52,3 +52,20 @@ self.addEventListener("fetch", (event) => {
     }),
   );
 });
+
+// A reminder from the private space: open (or focus) the app where it belongs.
+self.addEventListener("notificationclick", (event) => {
+  event.notification.close();
+  const href = (event.notification.data && event.notification.data.href) || "#/calendar";
+  event.waitUntil(
+    self.clients.matchAll({ type: "window", includeUncontrolled: true }).then((list) => {
+      for (const client of list) {
+        if (new URL(client.url).origin === location.origin) {
+          client.navigate(new URL(href, location.origin).href).catch(() => undefined);
+          return client.focus();
+        }
+      }
+      return self.clients.openWindow("/" + href);
+    }),
+  );
+});

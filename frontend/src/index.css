@@ -215,3 +215,72 @@
   content-visibility: auto;
   contain-intrinsic-size: auto 200px;
 }
+
+/* -------------------------------------------------------------------------
+   Rendered markdown (notes). Quiet, readable, same type as the rest.
+   ------------------------------------------------------------------------- */
+.md {
+  font-size: 0.95rem;
+  line-height: 1.65;
+  overflow-wrap: anywhere;
+}
+.md > :first-child { margin-top: 0; }
+.md > :last-child { margin-bottom: 0; }
+.md :where(p, ul, ol, blockquote, pre, table, hr) { margin: 0.7em 0; }
+.md :where(h1, h2, h3, h4, h5, h6) {
+  font-family: var(--font-display);
+  letter-spacing: -0.015em;
+  font-weight: 650;
+  line-height: 1.2;
+  margin: 1.3em 0 0.45em;
+}
+.md h1 { font-size: 1.75em; }
+.md h2 { font-size: 1.4em; }
+.md h3 { font-size: 1.18em; }
+.md :where(h4, h5, h6) { font-size: 1em; }
+.md a:not(.not-prose) {
+  color: var(--primary);
+  text-decoration: underline;
+  text-decoration-color: color-mix(in oklch, var(--primary) 40%, transparent);
+  text-underline-offset: 3px;
+}
+.md :where(ul, ol) { padding-left: 1.4em; }
+.md ul { list-style: disc; }
+.md ol { list-style: decimal; }
+.md li { margin: 0.2em 0; }
+.md li::marker { color: var(--muted-foreground); }
+.md ul.contains-task-list { list-style: none; padding-left: 0.2em; }
+.md li.task-list-item > ul.contains-task-list { padding-left: 1.5em; }
+.md li.task-list-item:has(> [aria-checked="true"]),
+.md li.task-list-item:has(> p > [aria-checked="true"]) {
+  color: var(--muted-foreground);
+  text-decoration: line-through;
+  text-decoration-color: color-mix(in oklch, var(--muted-foreground) 60%, transparent);
+}
+.md blockquote {
+  border-left: 3px solid color-mix(in oklch, var(--primary) 55%, transparent);
+  padding: 0.1em 0 0.1em 0.9em;
+  color: var(--muted-foreground);
+}
+.md code {
+  font-family: var(--font-mono);
+  font-size: 0.86em;
+  background: var(--muted);
+  border-radius: 5px;
+  padding: 0.12em 0.35em;
+}
+.md pre {
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  padding: 0.8em 1em;
+  overflow-x: auto;
+  line-height: 1.5;
+}
+.md pre code { background: none; padding: 0; font-size: 0.84em; }
+.md hr { border: 0; border-top: 1px solid var(--border); margin: 1.4em 0; }
+.md table { border-collapse: collapse; font-size: 0.92em; }
+.md :where(th, td) { border: 1px solid var(--border); padding: 0.35em 0.7em; text-align: left; }
+.md th { background: var(--muted); font-weight: 600; }
+.md img { max-width: 100%; border-radius: 8px; }
+.md del { color: var(--muted-foreground); }

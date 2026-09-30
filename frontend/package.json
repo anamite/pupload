@@ -1,7 +1,7 @@
 {
   "name": "pupload-web",
   "private": true,
-  "version": "2.3.0",
+  "version": "2.4.0",
   "type": "module",
   "scripts": {
     "dev": "vite",
@@ -20,6 +20,8 @@
     "radix-ui": "^1.4.2",
     "react": "^19.1.0",
     "react-dom": "^19.1.0",
+    "react-markdown": "^10.1.0",
+    "remark-gfm": "^4.0.1",
     "sonner": "^2.0.5",
     "tailwind-merge": "^3.3.0",
     "uqr": "^0.1.3"

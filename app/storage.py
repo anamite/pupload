@@ -31,7 +31,9 @@ TRASH_DIRNAME = ".pupload-trash"
 # Uploads in progress are assembled here and only moved into place once
 # complete, so a dropped connection never leaves a half file in a folder.
 UPLOADS_DIRNAME = ".pupload-uploads"
-INTERNAL_DIRS = frozenset({TRASH_DIRNAME, UPLOADS_DIRNAME})
+# Voice memos of the private space, encrypted like secure files.
+PRIVATE_DIRNAME = ".pupload-private"
+INTERNAL_DIRS = frozenset({TRASH_DIRNAME, UPLOADS_DIRNAME, PRIVATE_DIRNAME})
 INTERNAL_FILES = frozenset({vault.MARKER})
 UPLOAD_KEEP_SECONDS = 24 * 3600   # unfinished uploads can be resumed for a day
 
@@ -673,8 +675,8 @@ def tree_size(base: str) -> Tuple[int, int, int]:
 
 
 def usage(force: bool = False) -> Dict[str, int]:
-    """Bytes used. `bytes` includes the recycle bin and unfinished uploads,
-    which still occupy the disk."""
+    """Bytes used. `bytes` includes the recycle bin, unfinished uploads and
+    voice memos, which all occupy the disk."""
     base = str(root())
     keys = ("bytes", "files", "folders", "trash")
     with _usage_lock:
@@ -687,7 +689,8 @@ def usage(force: bool = False) -> Dict[str, int]:
     live, files, folders = tree_size(base)
     binned = tree_size(os.path.join(base, TRASH_DIRNAME))[0]
     staging = tree_size(os.path.join(base, UPLOADS_DIRNAME))[0]
-    result = {"bytes": live + binned + staging, "files": files, "folders": folders, "trash": binned}
+    memos = tree_size(os.path.join(base, PRIVATE_DIRNAME))[0]
+    result = {"bytes": live + binned + staging + memos, "files": files, "folders": folders, "trash": binned}
 
     with _usage_lock:
         _usage_cache.update({"root": base, "at": time.time(), **result})

@@ -10,6 +10,9 @@ folders for the things that aren't for everyone.
 * **Secure folders**: encrypted folders, greyed out and locked until you enter one master
   password. Their files and names are encrypted on the Pi, so they stay private from
   other people on the network *and* from anyone who takes the SD card or drive.
+* **Private space**: markdown notes (link files and folders with `[[ ]]`), voice memos,
+  named lists with due dates and reminders, and a calendar that imports and exports `.ics`.
+  It only exists on devices that unlocked secure folders, and it's encrypted the same way.
 * **Remote access** through a Cloudflare tunnel, behind a password *and* an authenticator
   code. There are two passwords: the basic one opens the drive with secure folders invisible,
   and the full one opens everything. The home network stays login-free.
@@ -218,6 +221,42 @@ passwords a device has to wait before trying again, longer after each further mi
 
 ---
 
+## Private space: notes, voice memos, lists, calendar
+
+Once a device has unlocked secure folders (or signed in remotely with the *full* password),
+a **Private** group appears in the sidebar (on phones: **More**). Everywhere else it doesn't
+exist: no menu entries, nothing in search or the recycle bin, and the server answers as if
+there were nothing there. Everything in it is encrypted with the secure folders' key.
+
+* **Notes** are markdown: headings, **bold**, lists, tables, code and `- [ ]` checklists you
+  can tick in the preview. The title is the first two words until you type your own (the
+  wand button goes back to automatic). Link anything in the drive with `[[Docs/cv.pdf]]` or
+  `[[Photos/2024]]` (type `[[` or use the paperclip to pick it); `[[path|label]]` sets the
+  text, and `![[Photos/cat.jpg]]` shows an image inline. Tapping a link opens the file or
+  folder. Notes save as you type.
+* **Voice memos** record in the browser and are encrypted as they upload. Browsers only allow
+  the microphone over **HTTPS** (the Tailscale address or remote access); on a plain
+  `http://` address use **Phone recorder** or **Add audio files** instead.
+* **Lists** have a name and items. Tap an item to edit it, give it a date (and optionally a
+  time) for a reminder, and paste several lines at once to add them all.
+* **Calendar**: month view with the day's agenda. Events can be all-day or timed, repeat
+  (daily, weekly on chosen days, monthly, yearly, until a date or a number of times) and
+  have up to five reminders. List items with a date show up here too and can be ticked off.
+  **⋮ → Import an .ics file** adds events from any calendar export (importing the same file
+  again updates instead of doubling), **Export** downloads them, and `.ics` files stored in
+  the drive have **Add to calendar** in their menu.
+
+**Reminders** ring on every device where pupload is open and unlocked: a message in the app,
+and a system notification once you allow it (**Calendar → ⋮ → Turn on notifications**,
+HTTPS only). A reminder that was missed while the app was closed still rings if it's under an
+hour late. The Pi can't read your reminders while it's locked, so it can't send them to a
+closed app; that is the trade-off for keeping them encrypted.
+
+Deleted notes, lists, events and memos go to the recycle bin like everything else (they
+only show there when unlocked). On disk: records live in `pupload.db` (table `private`, one
+AES-GCM blob per record, only its kind and change time readable) and memos in
+`<storage>/.pupload-private/`. Memos count towards the storage limit.
+
 ## Remote access from anywhere
 
 pupload listens on two ports, both served by the same program:
@@ -372,6 +411,8 @@ app/
   main.py               HTTP routes, range requests, streamed ZIP, links, recycle bin
   storage.py            safe paths (real names <-> encrypted on-disk names), listings, quota, expiry
   vault.py              secure folders: keys, encrypted file format, sessions
+  private.py            private space: notes, lists, events, voice memos (encrypted records)
+  ical.py               .ics import and export for the calendar
   remote.py             remote access: two passwords, authenticator codes, sign-ins, throttling
   trash.py              recycle bin: move in, restore, purge
   links.py              link validation and page-title lookup
@@ -381,7 +422,7 @@ app/
 tools/ui_source_hash.py fingerprint of the UI sources (installer skips rebuilds when it matches)
 frontend/
   src/components/ui/    shadcn/ui components
-  src/components/       files, links, bin, layout, settings
+  src/components/       files, links, bin, layout, settings, private (notes, memos, lists, calendar)
   src/lib/              API client, uploads queue, audio player, device ID, theme, PWA
   public/               manifest, service worker, icons
 data/                   config.json, vault.json, remote.json, pupload.db, files/, backups/ (not in git)

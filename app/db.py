@@ -5,7 +5,8 @@ when a file was uploaded, by which device, when it was last read, and whether
 it is pinned (pinned files never expire).
 
 `links` holds saved bookmarks (they never expire), and `trash` is the recycle
-bin index: one row per deleted file, folder or link.
+bin index: one row per deleted file, folder, link or private record. `private`
+holds the private space's notes, lists, events and voice memos, encrypted.
 """
 from __future__ import annotations
 
@@ -80,12 +81,27 @@ def _m1_devices_links_trash(cx: sqlite3.Connection) -> None:
     """)
 
 
+def _m2_private(cx: sqlite3.Connection) -> None:
+    """2.4: the private space (notes, voice memos, lists, calendar). Each row is
+    one record, encrypted with the secure folders' key; only its kind is plain."""
+    cx.executescript("""
+    CREATE TABLE IF NOT EXISTS private (
+        id          TEXT PRIMARY KEY,
+        kind        TEXT NOT NULL,            -- note | list | event | memo
+        blob        BLOB NOT NULL,            -- nonce + AES-GCM(JSON)
+        updated_at  REAL NOT NULL
+    );
+    CREATE INDEX IF NOT EXISTS idx_private_kind ON private(kind);
+    """)
+
+
 # Schema changes, applied in order exactly once and recorded in PRAGMA
 # user_version. To change the schema: append a function here — never edit or
 # reorder an existing one. Each must be safe on a database that already has
 # the change (use _add_column / IF NOT EXISTS).
 MIGRATIONS: List[Callable[[sqlite3.Connection], None]] = [
     _m1_devices_links_trash,
+    _m2_private,
 ]
 SCHEMA_VERSION = len(MIGRATIONS)
 
@@ -424,4 +440,46 @@ def trash_remove(trash_id: str) -> None:
     with _write_lock:
         cx = conn()
         cx.execute("DELETE FROM trash WHERE id = ?", (trash_id,))
+        cx.commit()
+
+
+# ---------------------------------------------------------------------------
+# Private space (encrypted records; see private.py)
+# ---------------------------------------------------------------------------
+
+def private_rows(kind: Optional[str] = None) -> List[Dict[str, Any]]:
+    cx = conn()
+    if kind:
+        rows = cx.execute("SELECT * FROM private WHERE kind = ?", (kind,))
+    else:
+        rows = cx.execute("SELECT * FROM private")
+    return [dict(r) for r in rows]
+
+
+def private_get(item_id: str) -> Optional[Dict[str, Any]]:
+    row = conn().execute("SELECT * FROM private WHERE id = ?", (item_id,)).fetchone()
+    return dict(row) if row else None
+
+
+def private_put(item_id: str, kind: str, blob: bytes) -> None:
+    with _write_lock:
+        cx = conn()
+        cx.execute("INSERT OR REPLACE INTO private (id, kind, blob, updated_at) VALUES (?, ?, ?, ?)",
+                   (item_id, kind, blob, time.time()))
+        cx.commit()
+
+
+def private_put_many(rows: Iterable[Tuple[str, str, bytes]]) -> None:
+    now = time.time()
+    with _write_lock:
+        cx = conn()
+        cx.executemany("INSERT OR REPLACE INTO private (id, kind, blob, updated_at) VALUES (?, ?, ?, ?)",
+                       [(i, k, b, now) for i, k, b in rows])
+        cx.commit()
+
+
+def private_delete(item_id: str) -> None:
+    with _write_lock:
+        cx = conn()
+        cx.execute("DELETE FROM private WHERE id = ?", (item_id,))
         cx.commit()

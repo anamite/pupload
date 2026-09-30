@@ -25,7 +25,7 @@ from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, Respo
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, config, db, links, remote, storage, trash, vault
+from . import __version__, config, db, ical, links, private, remote, storage, trash, vault
 from .errors import NotFound, StorageError, VaultLocked
 from .links import LinkError
 from .storage import Loc
@@ -178,7 +178,11 @@ def serve_file(loc: Loc, request: Request, download: bool) -> Response:
     rel = storage.rel_of(path)
     if rel:
         db.mark_access(rel)
+    return ranged(request, size, body, mime, headers)
 
+
+def ranged(request: Request, size: int, body: Any, mime: str, headers: Dict[str, str]) -> Response:
+    """Reply with all of `body(start, length)`, or the part a Range header asks for."""
     match = _RANGE_RE.fullmatch((request.headers.get("range") or "").strip())
     if match and size:
         raw_start, raw_end = match.group(1), match.group(2)
@@ -1019,6 +1023,223 @@ async def api_trash_empty(request: Request) -> Response:
 
 
 # ---------------------------------------------------------------------------
+# Routes: the private space (notes, voice memos, lists, calendar)
+# ---------------------------------------------------------------------------
+
+ICS_MAX = 8 * 1024 * 1024
+
+
+async def api_private(request: Request) -> Response:
+    """Every private record, decrypted, for a request that may see them."""
+    try:
+        k = private.keys()
+    except StorageError as exc:
+        return err(exc)
+    return ok(await asyncio.to_thread(private.everything, k))
+
+
+async def api_private_save(request: Request) -> Response:
+    data = await body_json(request)
+    kind = str(data.get("kind") or "")
+    item = data.get("item")
+    if kind not in private.KINDS or not isinstance(item, dict):
+        return fail("Nothing to save")
+    try:
+        k = private.keys()
+        doc = await asyncio.to_thread(private.save, k, kind, item)
+    except StorageError as exc:
+        return err(exc)
+    return ok({"item": doc})
+
+
+async def api_private_delete(request: Request) -> Response:
+    """Move private records to the recycle bin."""
+    data = await body_json(request)
+    kind = str(data.get("kind") or "")
+    ids = data.get("ids") or ([data["id"]] if data.get("id") else [])
+    try:
+        k = private.keys()
+    except StorageError as exc:
+        return err(exc)
+    who = device_of(request)["name"]
+    trash_ids: List[str] = []
+    for item_id in ids:
+        doc = private.get(k, kind, str(item_id))
+        if doc is None:
+            continue
+        try:
+            trash_ids.append(trash.bin_private(kind, doc, who)["id"])
+        except StorageError:
+            continue
+    storage.invalidate_usage()
+    return ok({"removed": len(trash_ids), "trash_ids": trash_ids})
+
+
+async def api_private_memo(request: Request) -> Response:
+    """A new voice memo: the body is the recording, encrypted as it arrives."""
+    params = request.query_params
+    try:
+        k = private.keys()
+    except StorageError as exc:
+        await discard_body(request)
+        return err(exc)
+    declared = int(request.headers.get("content-length") or 0)
+    if declared > private.MAX_MEMO_BYTES:
+        await discard_body(request)
+        return fail("That recording is too long", 413)
+    problem = room_for(declared)
+    if problem:
+        await discard_body(request)
+        return fail(problem, 413)
+
+    memo_id = private.new_id()
+    file_name = f"{memo_id}.pmemo"
+    target = private.memo_path(file_name)
+    part = target.with_suffix(".part")
+    enc = vault.Encryptor(k)
+    written = 0
+    try:
+        with open(part, "wb") as fh:
+            fh.write(enc.header)
+            async for chunk in body_chunks(request):
+                written += len(chunk)
+                if written > private.MAX_MEMO_BYTES:
+                    raise StorageError("That recording is too long")
+                fh.write(enc.feed(chunk))
+            fh.write(enc.finish())
+        if not written:
+            raise StorageError("The recording is empty")
+        os.replace(part, target)
+    except StorageError as exc:
+        part.unlink(missing_ok=True)
+        return fail(str(exc), 413)
+    except Exception:
+        part.unlink(missing_ok=True)
+        return fail("Upload failed", 500)
+
+    try:
+        duration = max(0.0, min(float(params.get("duration") or 0), 24 * 3600.0))
+    except ValueError:
+        duration = 0.0
+    now = time.time()
+    stamp = time.strftime("%d %b, %H:%M", time.localtime(now))
+    doc = {
+        "id": memo_id,
+        "title": links.clean_text(params.get("title"), 300) or f"Voice memo · {stamp}",
+        "note": "",
+        "pinned": False,
+        "file": file_name,
+        "mime": private.memo_mime(request.headers.get("content-type") or params.get("mime") or ""),
+        "size": written,
+        "duration": round(duration, 1),
+        "created": now,
+        "updated": now,
+    }
+    private.put(k, "memo", doc)
+    storage.invalidate_usage()
+    return ok({"item": doc, "stats": storage.stats()})
+
+
+async def api_private_memo_audio(request: Request) -> Response:
+    try:
+        k = private.keys()
+        doc = private.get(k, "memo", request.query_params.get("id", ""))
+        if doc is None:
+            return fail("Not found", 404)
+        path = private.memo_path(doc.get("file") or "")
+    except StorageError as exc:
+        return err(exc)
+    try:
+        size = vault.plain_size(path.stat().st_size)
+    except OSError:
+        return fail("The recording is missing", 404)
+    download = request.query_params.get("download") == "1"
+    headers = {
+        "Content-Disposition": content_disposition(private.memo_download_name(doc), not download),
+        "Accept-Ranges": "bytes",
+        "X-Content-Type-Options": "nosniff",
+        "Cache-Control": "no-store",
+    }
+
+    def body(start: int = 0, length: Optional[int] = None) -> Iterator[bytes]:
+        return vault.read_plain(path, k, start, length)
+
+    return ranged(request, size, body, doc.get("mime") or "audio/webm", headers)
+
+
+def _read_ics_file(rel: str) -> str:
+    loc = storage.locate(rel)
+    if not loc.path.is_file():
+        raise StorageError("File not found")
+    if loc.path.stat().st_size > ICS_MAX * 2:
+        raise StorageError("That calendar file is too big")
+    if loc.secure:
+        raw = b"".join(vault.read_plain(loc.path, vault.require()))
+    else:
+        raw = loc.path.read_bytes()
+    return raw.decode("utf-8", "replace")
+
+
+async def api_private_ics_import(request: Request) -> Response:
+    """Add the events of an .ics file (sent as text, or one already stored
+    here). Events imported before (same UID) are updated, not doubled."""
+    data = await body_json(request)
+    try:
+        k = private.keys()
+        if data.get("path"):
+            text = await asyncio.to_thread(_read_ics_file, str(data["path"]))
+        else:
+            text = str(data.get("text") or "")
+        if len(text) > ICS_MAX:
+            return fail("That calendar file is too big", 413)
+        parsed = await asyncio.to_thread(ical.parse, text, str(data.get("tz") or ""))
+    except ical.IcsError as exc:
+        return fail(str(exc))
+    except StorageError as exc:
+        return err(exc)
+    if not parsed:
+        return fail("No events found in that file")
+
+    def store() -> Dict[str, int]:
+        existing = {e.get("uid"): e for e in private.everything(k)["event"] if e.get("uid")}
+        added = updated = 0
+        now = time.time()
+        rows = []
+        for raw in parsed:
+            old = existing.get(raw.get("uid")) if raw.get("uid") else None
+            try:
+                doc = private.clean_event({**raw, "color": (old or {}).get("color", "")}, old, now)
+            except StorageError:
+                continue
+            rows.append((doc["id"], "event", private.seal(k, "event", doc)))
+            if doc.get("uid"):
+                existing[doc["uid"]] = doc
+            updated += 1 if old else 0
+            added += 0 if old else 1
+        db.private_put_many(rows)
+        return {"added": added, "updated": updated}
+
+    return ok(await asyncio.to_thread(store))
+
+
+async def api_private_ics_export(request: Request) -> Response:
+    try:
+        k = private.keys()
+    except StorageError as exc:
+        return err(exc)
+    wanted = set(request.query_params.getlist("ids"))
+    events = [e for e in private.everything(k)["event"] if not wanted or e["id"] in wanted]
+    if wanted and len(events) == 1:
+        name = storage.clean_name(events[0]["title"]) + ".ics"
+    else:
+        name = f"{config.get('app_name') or 'pupload'}-calendar.ics"
+    body = ical.export(events, config.get("app_name") or "pupload")
+    return Response(body, media_type="text/calendar; charset=utf-8",
+                    headers={"Content-Disposition": content_disposition(name, False),
+                             "Cache-Control": "no-store", "X-Content-Type-Options": "nosniff"})
+
+
+# ---------------------------------------------------------------------------
 # Routes: secure folders
 # ---------------------------------------------------------------------------
 
@@ -1461,6 +1682,13 @@ routes: List[Any] = [
     Route("/api/trash/restore", api_trash_restore, methods=["POST"]),
     Route("/api/trash/delete", api_trash_delete, methods=["POST"]),
     Route("/api/trash/empty", api_trash_empty, methods=["POST"]),
+    Route("/api/private", api_private),
+    Route("/api/private/save", api_private_save, methods=["POST"]),
+    Route("/api/private/delete", api_private_delete, methods=["POST"]),
+    Route("/api/private/memo", api_private_memo, methods=["POST", "PUT"]),
+    Route("/api/private/memo/audio", api_private_memo_audio),
+    Route("/api/private/ics/import", api_private_ics_import, methods=["POST"]),
+    Route("/api/private/ics", api_private_ics_export),
     Route("/api/vault", api_vault),
     Route("/api/vault/setup", api_vault_setup, methods=["POST"]),
     Route("/api/vault/unlock", api_vault_unlock, methods=["POST"]),

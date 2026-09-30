@@ -1,6 +1,21 @@
 import * as React from "react";
-import { Clock, HardDrive, Hourglass, Link2, Music4, Smartphone, Trash2, type LucideIcon } from "lucide-react";
+import {
+  CalendarDays,
+  Clock,
+  HardDrive,
+  Hourglass,
+  Link2,
+  ListChecks,
+  LockOpen,
+  Mic,
+  Music4,
+  NotebookPen,
+  Smartphone,
+  Trash2,
+  type LucideIcon,
+} from "lucide-react";
 import { useApp } from "@/components/app-context";
+import { usePrivateAccess } from "@/components/private/access";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { fmtSize } from "@/lib/format";
 import { useStats, useTrash } from "@/lib/queries";
@@ -23,6 +38,13 @@ export const NAV_MORE: NavEntry[] = [
   { view: "mine", label: "My uploads", icon: Smartphone },
   { view: "expiring", label: "Expiring soon", icon: Hourglass },
   { view: "bin", label: "Recycle bin", icon: Trash2 },
+];
+/** Only shown where secure folders are unlocked. */
+export const NAV_PRIVATE: NavEntry[] = [
+  { view: "notes", label: "Notes", icon: NotebookPen },
+  { view: "memos", label: "Voice memos", icon: Mic },
+  { view: "lists", label: "Lists", icon: ListChecks },
+  { view: "calendar", label: "Calendar", icon: CalendarDays },
 ];
 
 export function BrandMark({ className }: { className?: string }) {
@@ -80,11 +102,28 @@ function NavLink({ entry, active, compact }: { entry: NavEntry; active: boolean;
 }
 
 export function NavList({ view, compact = false }: { view: View; compact?: boolean }) {
+  const privateAccess = usePrivateAccess();
   return (
     <nav className="grid gap-0.5">
       {NAV_MAIN.map((e) => (
         <NavLink key={e.view} entry={e} active={view === e.view} compact={compact} />
       ))}
+      {privateAccess && (
+        <>
+          <div className="my-2 h-px bg-border" />
+          <div
+            className={cn(
+              "flex items-center gap-1.5 px-3 pb-1 text-[10.5px] font-semibold tracking-[0.12em] text-muted-foreground uppercase",
+              compact && "hidden lg:flex",
+            )}
+          >
+            <LockOpen className="size-3 text-primary" /> Private
+          </div>
+          {NAV_PRIVATE.map((e) => (
+            <NavLink key={e.view} entry={e} active={view === e.view} compact={compact} />
+          ))}
+        </>
+      )}
       <div className="my-2 h-px bg-border" />
       {NAV_MORE.map((e) => (
         <NavLink key={e.view} entry={e} active={view === e.view} compact={compact} />
@@ -198,5 +237,5 @@ export function Sidebar({ view }: { view: View }) {
 }
 
 export function useNavEntry(view: View): NavEntry | undefined {
-  return React.useMemo(() => [...NAV_MAIN, ...NAV_MORE].find((e) => e.view === view), [view]);
+  return React.useMemo(() => [...NAV_MAIN, ...NAV_PRIVATE, ...NAV_MORE].find((e) => e.view === view), [view]);
 }

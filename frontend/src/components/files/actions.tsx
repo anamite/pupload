@@ -1,6 +1,7 @@
 import * as React from "react";
 import { useQueryClient } from "@tanstack/react-query";
 import {
+  CalendarPlus,
   Download,
   FolderInput,
   FolderOpen,
@@ -38,6 +39,8 @@ export interface FileActions {
   remove: (paths: string[]) => Promise<void>;
   details: (item: Item) => void;
   moveTo: (paths: string[], to: string, label: string) => Promise<void>;
+  /** Add an .ics file's events to the private calendar (where it is unlocked). */
+  addToCalendar?: (item: Item) => Promise<void>;
 }
 
 export function useFileActions(opts: {
@@ -46,6 +49,7 @@ export function useFileActions(opts: {
   openMove: (paths: string[]) => void;
   openDetails: (item: Item) => void;
   clearSelection: () => void;
+  privateAccess?: boolean;
 }): FileActions {
   const qc = useQueryClient();
   const { settings } = useApp();
@@ -53,6 +57,7 @@ export function useFileActions(opts: {
   const vault = useVaultUi();
   const optsRef = React.useRef(opts);
   optsRef.current = opts;
+  const privateAccess = !!opts.privateAccess;
 
   return React.useMemo<FileActions>(() => {
     const fail = (err: unknown) => {
@@ -169,9 +174,24 @@ export function useFileActions(opts: {
       details(item) {
         optsRef.current.openDetails(item);
       },
+      addToCalendar: privateAccess
+        ? async (item) => {
+            try {
+              const tz = Intl.DateTimeFormat().resolvedOptions().timeZone;
+              const res = await api<{ added: number; updated: number }>("/api/private/ics/import", { path: item.path, tz });
+              qc.invalidateQueries({ queryKey: keys.private });
+              const updated = res.updated ? `, ${res.updated} updated` : "";
+              toast.success(`${plural(res.added, "event")} added to your calendar${updated}`, {
+                action: { label: "Open", onClick: () => navigate("calendar") },
+              });
+            } catch (err) {
+              fail(err);
+            }
+          }
+        : undefined,
     };
     return self;
-  }, [qc, settings.confirm_delete, settings.trash_days, dialogs, vault]);
+  }, [qc, settings.confirm_delete, settings.trash_days, dialogs, vault, privateAccess]);
 }
 
 type Entry = { key: string; label: string; icon: LucideIcon; run: () => void; destructive?: boolean } | "sep";
@@ -195,8 +215,10 @@ export function entriesFor(item: Item, actions: FileActions): Entry[] {
       { key: "del", label: "Move to recycle bin", icon: Trash2, destructive: true, run: () => actions.remove([item.path]) },
     ];
   }
+  const ics = !!actions.addToCalendar && /\.(ics|ical|ifb)$/i.test(item.name);
   return [
     { key: "open", label: item.kind === "audio" ? "Play" : "Open", icon: Play, run: () => actions.open(item) },
+    ...(ics ? [{ key: "cal", label: "Add to calendar", icon: CalendarPlus, run: () => actions.addToCalendar!(item) }] : []),
     { key: "dl", label: "Download", icon: Download, run: () => actions.download([item]) },
     // Secure files: a link only opens on unlocked devices, and they never expire.
     ...(item.secure

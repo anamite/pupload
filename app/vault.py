@@ -103,6 +103,7 @@ class Keys:
         self._name_mac = _hkdf(data_key, b"pupload name mac")
         self._file = _hkdf(data_key, b"pupload file")
         self._stage = AESGCM(_hkdf(data_key, b"pupload stage"))
+        self._private = AESGCM(_hkdf(data_key, b"pupload private"))
 
     def _ctr(self, iv: bytes):
         return Cipher(algorithms.AES(self._name_enc), modes.CTR(iv))
@@ -145,6 +146,17 @@ class Keys:
             return self._stage.decrypt(blob[:12], blob[12:], label)
         except (InvalidTag, ValueError):
             raise StorageError("The unfinished upload is damaged; start it again")
+
+    def seal_doc(self, data: bytes, label: bytes) -> bytes:
+        """A private-space record (note, list, event, memo). `label` binds it to its id."""
+        nonce = os.urandom(12)
+        return nonce + self._private.encrypt(nonce, data, label)
+
+    def open_doc(self, blob: bytes, label: bytes) -> Optional[bytes]:
+        try:
+            return self._private.decrypt(blob[:12], blob[12:], label)
+        except (InvalidTag, ValueError):
+            return None
 
 
 def current() -> Optional[Keys]:

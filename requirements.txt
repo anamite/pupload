@@ -1,2 +1,4 @@
 starlette>=0.37
 uvicorn>=0.29
+# time zones for calendar imports, where the OS has none (Windows, slim images)
+tzdata

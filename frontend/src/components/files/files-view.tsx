@@ -38,12 +38,13 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { Skeleton } from "@/components/ui/skeleton";
+import { usePrivateAccess } from "@/components/private/access";
 import { useVaultUi } from "@/components/vault/vault";
 import { api, isLocked, type Item, type Sort } from "@/lib/api";
 import { plural } from "@/lib/format";
 import { useIsPhone } from "@/lib/hooks";
 import { keys, useItems, type FileView } from "@/lib/queries";
-import { hrefFor, navigate } from "@/lib/router";
+import { hrefFor, navigate, takePendingOpen } from "@/lib/router";
 import { filesFromDrop, filesFromInput, uploads, type DroppedFile } from "@/lib/uploads";
 import { cn } from "@/lib/utils";
 import { useFileActions, VIEWABLE } from "./actions";
@@ -74,6 +75,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
   const phone = useIsPhone();
   const dialogs = useDialogs();
   const vault = useVaultUi();
+  const privateAccess = usePrivateAccess();
   const { settings, query, setQuery, sort, setSort, layout, setLayout } = useApp();
   const searching = query.trim().length > 0;
   const { data, isLoading, isError, error } = useItems(view, path, sort, query);
@@ -127,7 +129,18 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
     openMove: setMovePaths,
     openDetails: setDetails,
     clearSelection,
+    privateAccess,
   });
+
+  // A file referenced from a note: open it once its folder has loaded.
+  React.useEffect(() => {
+    if (view !== "files" || searching || !data) return;
+    const wanted = takePendingOpen(path);
+    if (!wanted) return;
+    const item = data.items.find((i) => i.path === wanted);
+    if (item) actions.open(item);
+    else toast.error("That file isn't here any more", { description: wanted });
+  }, [view, path, searching, data, actions]);
 
   const onSelect = React.useCallback(
     (item: Item, mode: "toggle" | "range") => {

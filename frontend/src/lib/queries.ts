@@ -4,6 +4,7 @@ import {
   type FolderInfo,
   type Item,
   type Link,
+  type PrivateData,
   type Settings,
   type Sort,
   type Stats,
@@ -23,6 +24,7 @@ export const keys = {
   folders: ["folders"] as const,
   auth: ["auth"] as const,
   remote: ["remote"] as const,
+  private: ["private"] as const,
 };
 
 export function useAuth() {
@@ -100,6 +102,18 @@ export function useTrash() {
       absorbStats(qc, data);
       return data.items;
     },
+  });
+}
+
+/** Notes, memos, lists and events. Only fetched where secure folders are unlocked. */
+export function usePrivate(enabled: boolean) {
+  return useQuery({
+    queryKey: keys.private,
+    queryFn: () => api<PrivateData>("/api/private"),
+    enabled,
+    staleTime: 15_000,
+    refetchInterval: enabled ? 60_000 : false,
+    retry: false,
   });
 }
 

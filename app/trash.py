@@ -8,9 +8,13 @@ what and which files were pinned. Links are stored in the record itself.
 Deleted secure items stay encrypted in the bin, under their encrypted names.
 Only a device that has unlocked secure folders sees what they are, and only
 such a device can restore them or delete them for good.
+
+Private-space records (notes, lists, events, voice memos) keep their sealed
+row in the record. They don't show at all unless secure folders are unlocked.
 """
 from __future__ import annotations
 
+import base64
 import os
 import shutil
 import time
@@ -18,7 +22,7 @@ import uuid
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from . import config, db, storage, vault
+from . import config, db, private, storage, vault
 from .storage import DAY, TRASH_DIRNAME, StorageError
 
 
@@ -115,9 +119,54 @@ def bin_link(link: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
     return record
 
 
+def bin_private(kind: str, doc: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
+    """Move a private record to the bin, still sealed. A memo's audio stays put."""
+    row = db.private_get(doc["id"])
+    if row is None:
+        raise StorageError("Already deleted")
+    size = len(row["blob"])
+    memo = doc.get("file") if kind == "memo" else ""
+    if memo:
+        try:
+            size = private.memo_path(memo).stat().st_size
+        except (OSError, StorageError):
+            pass
+    record = {
+        "id": uuid.uuid4().hex,
+        "kind": kind,
+        "name": "",
+        "original": "",
+        "blob": "",
+        "size": size,
+        "items": 1,
+        "deleted_at": time.time(),
+        "deleted_by": deleted_by,
+        "payload": {"private": {"id": row["id"], "kind": kind,
+                                "blob": base64.b64encode(bytes(row["blob"])).decode("ascii")},
+                    "memo": memo or ""},
+    }
+    db.trash_add(record)
+    db.private_delete(row["id"])
+    return record
+
+
+def is_private(row: Dict[str, Any]) -> bool:
+    return bool((row.get("payload") or {}).get("private"))
+
+
+def _private_doc(row: Dict[str, Any], keys: "vault.Keys") -> Optional[Dict[str, Any]]:
+    sealed = (row.get("payload") or {}).get("private") or {}
+    try:
+        blob = base64.b64decode(sealed.get("blob") or "")
+    except ValueError:
+        return None
+    return private.unseal(keys, {"id": sealed.get("id"), "kind": sealed.get("kind"), "blob": blob})
+
+
 def is_secure(row: Dict[str, Any]) -> bool:
     payload = row.get("payload") or {}
-    return bool(payload.get("secure") or payload.get("vault") or payload.get("holds_secure"))
+    return bool(payload.get("secure") or payload.get("vault") or payload.get("holds_secure")
+                or payload.get("private"))
 
 
 def describe(row: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -129,7 +178,11 @@ def describe(row: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> Dict[
     secure = is_secure(row)
     keys = vault.current()
     locked = secure and keys is None
-    if secure:
+    if is_private(row) and keys is not None:
+        doc = _private_doc(row, keys) or {}
+        name = private.title_of(row["kind"], doc)
+        original = private.LABELS.get(row["kind"], "")
+    elif secure:
         if keys and payload.get("secure"):
             name = keys.dec_name(name) or name
         original = storage.logical_rel(original)
@@ -157,14 +210,22 @@ def describe(row: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> Dict[
 def listing() -> List[Dict[str, Any]]:
     cfg = config.load()
     hidden = vault.HIDDEN.get()
-    return [describe(r, cfg) for r in db.trash_list() if not (hidden and is_secure(r))]
+    unlocked = vault.current() is not None
+    return [describe(r, cfg) for r in db.trash_list()
+            if not (hidden and is_secure(r)) and not (is_private(r) and not unlocked)]
 
 
 def restore(trash_id: str) -> Dict[str, Any]:
     row = db.trash_get(trash_id)
-    if row is None or (vault.HIDDEN.get() and is_secure(row)):
+    if row is None or (vault.HIDDEN.get() and is_secure(row)) or (is_private(row) and vault.current() is None):
         raise StorageError("Already gone from the recycle bin")
     payload = row.get("payload") or {}
+
+    if is_private(row):
+        sealed = payload["private"]
+        db.private_put(sealed["id"], sealed["kind"], base64.b64decode(sealed["blob"]))
+        db.trash_remove(trash_id)
+        return {"kind": row["kind"], "path": "", "id": sealed["id"]}
 
     if row["kind"] == "link":
         db.link_put(payload.get("link") or {})
@@ -213,6 +274,13 @@ def restore(trash_id: str) -> Dict[str, Any]:
 
 def _destroy(row: Dict[str, Any]) -> int:
     freed = 0
+    memo = (row.get("payload") or {}).get("memo") if is_private(row) else ""
+    if memo:
+        try:
+            private.memo_path(memo).unlink(missing_ok=True)
+            freed = int(row.get("size") or 0)
+        except (OSError, StorageError):
+            pass
     if row["kind"] != "link" and row.get("blob"):
         blob = Path(row["blob"])
         holder = blob.parent
@@ -233,7 +301,7 @@ def _destroy(row: Dict[str, Any]) -> int:
 
 def delete_forever(trash_id: str) -> int:
     row = db.trash_get(trash_id)
-    if row is None or (vault.HIDDEN.get() and is_secure(row)):
+    if row is None or (vault.HIDDEN.get() and is_secure(row)) or (is_private(row) and vault.current() is None):
         return 0
     if is_secure(row):
         vault.require()
@@ -248,7 +316,7 @@ def empty() -> Dict[str, int]:
     unlocked = vault.current() is not None
     for row in db.trash_list():
         if is_secure(row) and not unlocked:
-            kept += 1
+            kept += 0 if is_private(row) else 1   # private records aren't even mentioned
             continue
         freed += _destroy(row)
         count += 1

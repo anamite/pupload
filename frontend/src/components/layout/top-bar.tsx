@@ -36,6 +36,10 @@ import { BrandMark } from "./nav";
 const PLACEHOLDER: Partial<Record<View, string>> = {
   links: "Search links, notes and tags",
   bin: "Search the recycle bin",
+  notes: "Search notes",
+  memos: "Search voice memos",
+  lists: "Search lists and items",
+  calendar: "Search events",
 };
 
 const THEME_ICON: Record<Theme, typeof Sun> = { system: Monitor, light: Sun, slate: Moon, ink: SunMoon };

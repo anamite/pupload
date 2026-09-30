@@ -140,7 +140,7 @@ export interface Link {
 
 export interface TrashItem {
   id: string;
-  kind: "file" | "folder" | "link";
+  kind: "file" | "folder" | "link" | PrivateKind;
   name: string;
   original: string;
   size: number;
@@ -148,10 +148,100 @@ export interface TrashItem {
   deleted_at: number;
   deleted_by: string;
   purge_at: number | null;
-  file_kind: Kind | "link";
+  file_kind: Kind | "link" | PrivateKind;
   url: string | null;
   secure?: boolean;
   locked?: boolean;
+}
+
+// ---------------------------------------------------------------------------
+// The private space: only where secure folders are unlocked.
+// Dates: "2026-10-01" is a whole day in the viewer's zone; anything with a
+// time is a UTC instant ("2026-10-01T10:30:00Z").
+// ---------------------------------------------------------------------------
+
+export type PrivateKind = "note" | "list" | "event" | "memo";
+export type Tint = "" | "red" | "orange" | "amber" | "green" | "teal" | "blue" | "violet" | "pink";
+
+export interface Note {
+  id: string;
+  title: string;
+  /** The title follows the note's first two words until it is edited. */
+  title_auto: boolean;
+  body: string;
+  pinned: boolean;
+  color: Tint;
+  created: number;
+  updated: number;
+}
+
+export interface ListItem {
+  id: string;
+  text: string;
+  done: boolean;
+  due: string | null;
+  note: string;
+  created: number;
+  done_at: number | null;
+}
+
+export interface TodoList {
+  id: string;
+  name: string;
+  items: ListItem[];
+  pinned: boolean;
+  color: Tint;
+  created: number;
+  updated: number;
+}
+
+export type Freq = "daily" | "weekly" | "monthly" | "yearly";
+
+export interface Repeat {
+  freq: Freq;
+  interval: number;
+  count?: number;
+  until?: string;
+  /** Weekly only: days of the week, 0 = Sunday. */
+  byday?: number[];
+}
+
+export interface CalEvent {
+  id: string;
+  title: string;
+  notes: string;
+  location: string;
+  all_day: boolean;
+  start: string;
+  /** Inclusive: the last day of an all-day event. */
+  end: string;
+  /** Minutes before the start. */
+  alerts: number[];
+  repeat: Repeat | null;
+  color: Tint;
+  source: string;
+  uid: string;
+  created: number;
+  updated: number;
+}
+
+export interface Memo {
+  id: string;
+  title: string;
+  note: string;
+  pinned: boolean;
+  mime: string;
+  size: number;
+  duration: number;
+  created: number;
+  updated: number;
+}
+
+export interface PrivateData {
+  note: Note[];
+  list: TodoList[];
+  event: CalEvent[];
+  memo: Memo[];
 }
 
 export interface FolderNode {
