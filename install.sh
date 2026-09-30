@@ -492,8 +492,10 @@ echo
 echo "    On a phone: open the address, then \"Add to Home screen\" to install it as an app."
 echo
 if [ "$REMOTE_PORT" != 0 ]; then
+  # The port may have moved on if something else had it; data/remote-port says where it went.
+  REMOTE_ACTUAL="$(awk '{print $2}' "$HERE/data/remote-port" 2>/dev/null | tr -dc 0-9 || true)"
   echo "    Remote access (password + authenticator code), for a Cloudflare tunnel:"
-  echo "      http://127.0.0.1:${REMOTE_PORT}   set it up in Settings -> Remote access, then see the README"
+  echo "      http://127.0.0.1:${REMOTE_ACTUAL:-$REMOTE_PORT}   set it up in Settings -> Remote access, then see the README"
   echo
 fi
 if [ "$SERVICE" = 1 ]; then

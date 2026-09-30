@@ -67,7 +67,7 @@ Pages already open on phones show a *"pupload has been updated — Reload"* mess
 | Option | Effect |
 | --- | --- |
 | `--port=9000` | preferred port (default 8080). If it's taken, the next free one is used |
-| `--remote-port=8090` | port for [remote access](#remote-access-from-anywhere) (default 8090, only on `127.0.0.1`; `0` turns it off) |
+| `--remote-port=8090` | port for [remote access](#remote-access-from-anywhere) (default 8090, only on `127.0.0.1`; `0` turns it off). If it's taken, the next free one is used and then kept (it's in `data/remote-port`), because your tunnel points at it. **Settings → Remote access** shows the port in use |
 | `--dir=/srv/pupload` | where to install when using the curl one-liner |
 | `--no-service` | set up only; don't install the background service |
 | `--no-thumbnails` | skip Pillow (image thumbnails) |

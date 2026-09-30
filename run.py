@@ -57,6 +57,42 @@ def pick_port(host: str, wanted: int, strict: bool, avoid: int = 0) -> int:
     sys.exit(f"No free port between {wanted} and {wanted + PORT_SEARCH}; pass --port")
 
 
+def pick_remote_port(host: str, wanted: int, avoid: int, saved: "os.PathLike[str]") -> int:
+    """The remote port, or 0 (off). Like the home-network port it moves to the
+    next free one when taken, but only the first time: after that it is saved
+    and kept, because a tunnel points at it. Asking for another port starts over."""
+    from pathlib import Path
+
+    from app import remote
+
+    if not 0 < wanted < 65536:
+        return 0
+    record = Path(saved)
+    try:
+        asked, chosen = (int(n) for n in record.read_text("utf-8").split())
+    except (OSError, ValueError):
+        asked = chosen = 0
+    if asked == wanted and chosen:
+        if chosen != avoid and port_free(host, chosen):
+            return chosen
+        remote.LISTEN["error"] = (f"port {chosen}, where your tunnel points, is used by another program. "
+                                  f"Stop that program, or delete data/remote-port to let pupload pick a new one")
+        print(f"  ! remote access is off: port {chosen} is used by another program", flush=True)
+        return 0
+    for port in range(wanted, min(wanted + PORT_SEARCH, 65535) + 1):
+        if port != avoid and port_free(host, port):
+            if port != wanted:
+                print(f"  ! port {wanted} is in use by another program, remote access uses {port}", flush=True)
+            try:
+                record.write_text(f"{wanted} {port}\n", "utf-8")
+            except OSError:
+                pass
+            return port
+    remote.LISTEN["error"] = f"no free port between {wanted} and {wanted + PORT_SEARCH}"
+    print(f"  ! remote access is off: {remote.LISTEN['error']}", flush=True)
+    return 0
+
+
 def main() -> None:
     ap = argparse.ArgumentParser(description="pupload - local file drop")
     ap.add_argument("--host", default=os.environ.get("PUPLOAD_HOST", "0.0.0.0"))
@@ -64,7 +100,8 @@ def main() -> None:
     ap.add_argument("--strict-port", action="store_true",
                     help="fail instead of moving to the next free port when the port is taken")
     ap.add_argument("--remote-port", type=int, default=int(os.environ.get("PUPLOAD_REMOTE_PORT", "8090")),
-                    help="port for remote access through a tunnel (0 = off). Never moves: the tunnel points at it")
+                    help="preferred port for remote access through a tunnel (0 = off). If taken the first "
+                         "time, the next free one is used and kept from then on (data/remote-port)")
     ap.add_argument("--remote-host", default=os.environ.get("PUPLOAD_REMOTE_HOST", "127.0.0.1"),
                     help="address for the remote port; keep 127.0.0.1 so only the tunnel can reach it")
     args = ap.parse_args()
@@ -82,11 +119,7 @@ def main() -> None:
     except OSError:
         pass
 
-    remote_port = args.remote_port if 0 < args.remote_port < 65536 else 0
-    if remote_port and not port_free(args.remote_host, remote_port):
-        remote.LISTEN["error"] = f"port {remote_port} is used by another program"
-        print(f"  ! remote access is off: {remote.LISTEN['error']} (pass --remote-port)", flush=True)
-        remote_port = 0
+    remote_port = pick_remote_port(args.remote_host, args.remote_port, port, config.DATA_DIR / "remote-port")
     if remote_port:
         remote.LISTEN.update(host=args.remote_host, port=remote_port)
 
