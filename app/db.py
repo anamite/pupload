@@ -20,7 +20,7 @@ from .config import DATA_DIR
 DB_PATH = DATA_DIR / "pupload.db"
 
 _local = threading.local()
-_write_lock = threading.Lock()
+_write_lock = threading.RLock()   # re-entrant: conn() takes it too, on first use in a thread
 
 # The original (v1) table. Everything after it is a numbered migration.
 BASE_SCHEMA = """

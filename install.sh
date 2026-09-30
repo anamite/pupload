@@ -13,6 +13,7 @@
 #
 # Options:
 #   --port=8080        preferred port; if another program uses it, the next free one is taken
+#   --remote-port=8090 port for remote access through a tunnel (127.0.0.1 only; 0 = off)
 #   --dir=PATH         where to put pupload when installing via curl (default ~/pupload)
 #   --no-service       set everything up but do not install the background service
 #   --no-thumbnails    skip Pillow (image thumbnails); useful on a Pi Zero
@@ -23,6 +24,7 @@ set -euo pipefail
 REPO_URL="https://github.com/anamite/pupload.git"
 DEFAULT_PORT=8080
 PORT=""
+REMOTE_PORT=""
 SERVICE=1
 THUMBS=1
 BUILD=auto
@@ -33,6 +35,7 @@ ARGS=("$@")
 for arg in "$@"; do
   case "$arg" in
     --port=*) PORT="${arg#*=}" ;;
+    --remote-port=*) REMOTE_PORT="${arg#*=}" ;;
     --dir=*) TARGET_DIR="${arg#*=}" ;;
     --service) SERVICE=1 ;;
     --no-service) SERVICE=0 ;;
@@ -40,12 +43,15 @@ for arg in "$@"; do
     --no-thumbnails) THUMBS=0 ;;
     --skip-build) BUILD=never ;;
     --force) FORCE=1 ;;
-    -h|--help) sed -n '2,23p' "$0" 2>/dev/null || true; exit 0 ;;
+    -h|--help) sed -n '2,24p' "$0" 2>/dev/null || true; exit 0 ;;
     *) echo "unknown option: $arg (see --help)"; exit 1 ;;
   esac
 done
 if [ -n "$PORT" ] && ! [[ "$PORT" =~ ^[0-9]+$ && "$PORT" -ge 1 && "$PORT" -le 65535 ]]; then
   echo "--port must be a number between 1 and 65535"; exit 1
+fi
+if [ -n "$REMOTE_PORT" ] && ! [[ "$REMOTE_PORT" =~ ^[0-9]+$ && "$REMOTE_PORT" -le 65535 ]]; then
+  echo "--remote-port must be a number between 0 and 65535"; exit 1
 fi
 
 bold() { printf '\033[1m%s\033[0m\n' "$*"; }
@@ -365,6 +371,10 @@ if [ -z "$WANT" ] && [ -f "$UNIT" ]; then
   WANT="$(sed -n 's/^Environment=PUPLOAD_PORT=\([0-9]*\)$/\1/p' "$UNIT" | head -1)"
 fi
 WANT="${WANT:-$DEFAULT_PORT}"
+if [ -z "$REMOTE_PORT" ] && [ -f "$UNIT" ]; then
+  REMOTE_PORT="$(sed -n 's/^Environment=PUPLOAD_REMOTE_PORT=\([0-9]*\)$/\1/p' "$UNIT" | head -1)"
+fi
+REMOTE_PORT="${REMOTE_PORT:-8090}"
 CANDIDATES=("$WANT")
 [ -f "$HERE/data/port" ] && CANDIDATES=("$(tr -dc 0-9 < "$HERE/data/port")" "$WANT")
 
@@ -375,6 +385,7 @@ for p in "${CANDIDATES[@]}"; do
 done
 if [ -z "$CHOSEN" ]; then
   for p in $(seq "$WANT" $((WANT + 50))); do
+    [ "$p" = "$REMOTE_PORT" ] && continue   # kept for remote access
     case "$(port_state "$p")" in
       free|pupload) CHOSEN="$p"; break ;;
       busy) echo "   port $p is used by another program" ;;
@@ -407,8 +418,9 @@ Type=simple
 User=${RUN_USER}
 WorkingDirectory=${HERE}
 Environment=PUPLOAD_PORT=${PORT}
+Environment=PUPLOAD_REMOTE_PORT=${REMOTE_PORT}
 Environment=PYTHONUNBUFFERED=1
-ExecStart=${HERE}/.venv/bin/python ${HERE}/run.py --port ${PORT}
+ExecStart=${HERE}/.venv/bin/python ${HERE}/run.py --port ${PORT} --remote-port ${REMOTE_PORT}
 Restart=always
 RestartSec=3
 Nice=5
@@ -479,6 +491,11 @@ echo "      http://${HOST}.local:${PORT}"
 echo
 echo "    On a phone: open the address, then \"Add to Home screen\" to install it as an app."
 echo
+if [ "$REMOTE_PORT" != 0 ]; then
+  echo "    Remote access (password + authenticator code), for a Cloudflare tunnel:"
+  echo "      http://127.0.0.1:${REMOTE_PORT}   set it up in Settings -> Remote access, then see the README"
+  echo
+fi
 if [ "$SERVICE" = 1 ]; then
   echo "    Runs in the background and starts on boot."
   echo "      status:   systemctl status pupload"
@@ -486,6 +503,6 @@ if [ "$SERVICE" = 1 ]; then
   echo "      update:   run the same install command again"
 else
   echo "    Start it with:"
-  echo "      ${HERE}/.venv/bin/python ${HERE}/run.py --port ${PORT}"
+  echo "      ${HERE}/.venv/bin/python ${HERE}/run.py --port ${PORT} --remote-port ${REMOTE_PORT}"
 fi
 echo

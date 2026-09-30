@@ -75,6 +75,8 @@ THUMB_CACHE = 300
 
 # Set per request by the session middleware: may this request use the vault?
 ACCESS: ContextVar[bool] = ContextVar("pupload_vault_access", default=False)
+# ...and should secure folders not even be shown? (a basic remote sign-in)
+HIDDEN: ContextVar[bool] = ContextVar("pupload_vault_hidden", default=False)
 
 _lock = threading.RLock()
 _keys: Optional["Keys"] = None
@@ -95,6 +97,7 @@ class Keys:
     """Everything derived from the data key. Lives only in memory."""
 
     def __init__(self, data_key: bytes) -> None:
+        self.data_key = data_key        # kept so remote access can wrap it too
         self.id = _hkdf(data_key, b"pupload vault id")[:8].hex()
         self._name_enc = _hkdf(data_key, b"pupload name enc")
         self._name_mac = _hkdf(data_key, b"pupload name mac")
@@ -154,6 +157,10 @@ def require() -> Keys:
     if keys is None:
         raise VaultLocked()
     return keys
+
+
+def data_key() -> bytes:
+    return require().data_key
 
 
 # ---------------------------------------------------------------------------
@@ -429,6 +436,11 @@ def _from_password(password: str) -> Optional[bytes]:
     return _unwrap(kek, rec)
 
 
+def opens(password: str) -> bool:
+    """Is this the master password?"""
+    return _from_password(password) is not None
+
+
 def _from_recovery(code: str) -> Optional[bytes]:
     rec = _read().get("recovery") or {}
     try:
@@ -502,6 +514,11 @@ def _digest(token: str) -> str:
     return hashlib.sha256(token.encode("utf-8", "ignore")).hexdigest()
 
 
+def open_session(data_key: bytes, hours: int, device: str) -> Tuple[str, float]:
+    """Unlock with a data key unwrapped elsewhere (a full remote sign-in)."""
+    return _open(data_key, hours, device)
+
+
 def _open(data_key: bytes, hours: int, device: str) -> Tuple[str, float]:
     """Load the key (if it is not already) and start a session, in one step so a
     concurrent prune can never drop the key in between."""
@@ -560,6 +577,9 @@ def lock_everywhere() -> None:
 
 
 def status(token: Optional[str]) -> Dict[str, Any]:
+    if HIDDEN.get():
+        return {"available": AVAILABLE, "configured": False, "unlocked": False, "expires": None,
+                "hours": config.get("vault_hours"), "hidden": True}
     found = session(token)
     return {
         "available": AVAILABLE,

@@ -41,6 +41,42 @@ export interface VaultStatus {
   unlocked: boolean;
   expires: number | null;
   hours: number;
+  /** Signed in remotely with the basic password: secure folders don't exist here. */
+  hidden?: boolean;
+}
+
+export type Tier = "basic" | "full";
+
+/** Which door this page came in by. On the home network: `{ remote: false }`. */
+export interface AuthStatus {
+  remote: boolean;
+  configured?: boolean;
+  signed_in?: boolean;
+  tier?: Tier | null;
+  expires?: number | null;
+}
+
+export interface RemoteSession {
+  tier: Tier;
+  created: number;
+  expires: number;
+  seen: number;
+  device: string;
+  ip: string;
+}
+
+/** Remote access as seen from the home network. */
+export interface RemoteStatus {
+  configured: boolean;
+  port: number | null;
+  host: string | null;
+  error: string;
+  days: number;
+  hours: number;
+  min_password: number;
+  created?: number | null;
+  full_ok?: boolean;
+  sessions?: RemoteSession[];
 }
 
 export interface Stats {
@@ -74,6 +110,7 @@ export interface Settings {
   thumbnails: boolean;
   keep_free_bytes: number;
   vault_hours: number;
+  remote_days: number;
 }
 
 export interface StorageOption {
@@ -138,6 +175,9 @@ export class ApiError extends Error {
   }
 }
 
+/** Fired when the remote port says the sign-in is gone (expired, or signed out elsewhere). */
+export const SIGNED_OUT = "pupload:signed-out";
+
 export const isLocked = (err: unknown) => err instanceof ApiError && err.locked;
 
 export async function api<T = Record<string, unknown>>(path: string, body?: unknown): Promise<T> {
@@ -158,6 +198,7 @@ export async function api<T = Record<string, unknown>>(path: string, body?: unkn
   } catch {
     throw new ApiError(`Server error (${res.status})`, res.status);
   }
+  if (res.status === 401) window.dispatchEvent(new Event(SIGNED_OUT));
   if (!res.ok || !data.ok) throw new ApiError(data.error || "Request failed", res.status);
   return data as T;
 }

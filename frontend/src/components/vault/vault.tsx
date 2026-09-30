@@ -3,6 +3,7 @@ import { useQueryClient } from "@tanstack/react-query";
 import { Copy, Download, KeyRound, LockKeyhole, ShieldCheck } from "lucide-react";
 import { toast } from "sonner";
 import { useApp } from "@/components/app-context";
+import { useAuthUi } from "@/components/remote/auth";
 import { Button } from "@/components/ui/button";
 import { Checkbox } from "@/components/ui/checkbox";
 import {
@@ -43,6 +44,7 @@ export function useVaultUi(): VaultApi {
 
 export function VaultProvider({ children }: { children: React.ReactNode }) {
   const qc = useQueryClient();
+  const { remote } = useAuthUi();
   const { data: status } = useVault();
   const [mode, setMode] = React.useState<Mode | null>(null);
   const [recoveryKey, setRecoveryKey] = React.useState("");
@@ -74,6 +76,8 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       return false;
     }
     if (current.unlocked) return true;
+    // Remotely, only the full password opens secure folders: there is nothing to unlock here.
+    if (current.hidden || remote) return false;
     if (!current.available) {
       toast.error("Secure folders are not available", {
         description: "The server is missing the 'cryptography' package. Run the installer again.",
@@ -82,11 +86,11 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
     }
     setMode(current.configured ? "unlock" : "setup");
     return new Promise<boolean>((resolve) => waiting.current.push(resolve));
-  }, [qc]);
+  }, [qc, remote]);
 
   const handle = React.useCallback(
     (err: unknown) => {
-      if (!isLocked(err)) return false;
+      if (!isLocked(err) || remote) return false;
       // The server says locked (the session ran out, or was locked elsewhere):
       // believe it over the cached status, then ask for the password.
       const known = statusRef.current;
@@ -98,7 +102,7 @@ export function VaultProvider({ children }: { children: React.ReactNode }) {
       ensureUnlocked();
       return true;
     },
-    [ensureUnlocked, qc],
+    [ensureUnlocked, qc, remote],
   );
 
   const lock = React.useCallback(

@@ -77,7 +77,9 @@ def bin_path(target: Path, deleted_by: str, loc: Optional[storage.Loc] = None) -
         "deleted_at": time.time(),
         "deleted_by": deleted_by,
         "payload": {"meta": rows, "secure": bool(loc and loc.secure), "vault": bool(loc and loc.vault),
-                    "vault_root": _vault_root(rel) if loc and loc.secure else ""},
+                    "vault_root": _vault_root(rel) if loc and loc.secure else "",
+                    # a plain folder with a secure folder inside: treated as secure in the bin
+                    "holds_secure": bool(is_dir and not (loc and loc.sealed) and storage.holds_vault(blob))},
     }
     db.trash_add(record)
     storage.invalidate_usage()
@@ -115,7 +117,7 @@ def bin_link(link: Dict[str, Any], deleted_by: str) -> Dict[str, Any]:
 
 def is_secure(row: Dict[str, Any]) -> bool:
     payload = row.get("payload") or {}
-    return bool(payload.get("secure") or payload.get("vault"))
+    return bool(payload.get("secure") or payload.get("vault") or payload.get("holds_secure"))
 
 
 def describe(row: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> Dict[str, Any]:
@@ -154,12 +156,13 @@ def describe(row: Dict[str, Any], cfg: Optional[Dict[str, Any]] = None) -> Dict[
 
 def listing() -> List[Dict[str, Any]]:
     cfg = config.load()
-    return [describe(r, cfg) for r in db.trash_list()]
+    hidden = vault.HIDDEN.get()
+    return [describe(r, cfg) for r in db.trash_list() if not (hidden and is_secure(r))]
 
 
 def restore(trash_id: str) -> Dict[str, Any]:
     row = db.trash_get(trash_id)
-    if row is None:
+    if row is None or (vault.HIDDEN.get() and is_secure(row)):
         raise StorageError("Already gone from the recycle bin")
     payload = row.get("payload") or {}
 
@@ -230,7 +233,7 @@ def _destroy(row: Dict[str, Any]) -> int:
 
 def delete_forever(trash_id: str) -> int:
     row = db.trash_get(trash_id)
-    if row is None:
+    if row is None or (vault.HIDDEN.get() and is_secure(row)):
         return 0
     if is_secure(row):
         vault.require()
@@ -251,7 +254,7 @@ def empty() -> Dict[str, int]:
         count += 1
     _clean_orphans()
     storage.invalidate_usage()
-    return {"count": count, "bytes": freed, "kept": kept}
+    return {"count": count, "bytes": freed, "kept": 0 if vault.HIDDEN.get() else kept}
 
 
 def purge_old() -> Dict[str, int]:

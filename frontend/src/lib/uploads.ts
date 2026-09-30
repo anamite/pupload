@@ -1,4 +1,5 @@
 import { useSyncExternalStore } from "react";
+import { SIGNED_OUT } from "./api";
 import { deviceHeaders, deviceId } from "./device";
 
 /**
@@ -118,6 +119,9 @@ function sendChunk(job: UploadJob, start: number, end: number): Promise<ChunkRes
         resolve({ kind: "resync", offset: data.offset });
       } else if (xhr.status >= 500 || xhr.status === 0 || xhr.status === 408 || xhr.status === 429) {
         resolve({ kind: "retry", message: data.error || `Server error (${xhr.status})` });
+      } else if (xhr.status === 401) {
+        window.dispatchEvent(new Event(SIGNED_OUT));
+        resolve({ kind: "fatal", message: "Signed out — sign in, then retry" });
       } else {
         const message = xhr.status === 423 ? "Secure folder is locked — unlock it, then retry" : data.error;
         resolve({ kind: "fatal", message: message || `Failed (${xhr.status})` });

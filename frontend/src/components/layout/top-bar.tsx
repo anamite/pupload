@@ -15,6 +15,7 @@ import {
   X,
 } from "lucide-react";
 import { useApp } from "@/components/app-context";
+import { AccountButton, useAuthUi } from "@/components/remote/auth";
 import { useVaultUi } from "@/components/vault/vault";
 import { Button } from "@/components/ui/button";
 import {
@@ -149,6 +150,7 @@ export function TopBar({ view }: { view: View }) {
           {!(phone && searchOpen) && (
             <>
               <VaultButton />
+              <AccountButton />
               <DropdownMenu>
                 <DropdownMenuTrigger asChild>
                   <Button variant="ghost" size="icon" aria-label="Theme">
@@ -183,8 +185,9 @@ export function TopBar({ view }: { view: View }) {
 /** Secure folders: unlock from here, or see that this device is unlocked and lock it. */
 function VaultButton() {
   const vault = useVaultUi();
+  const { remote } = useAuthUi();
   const status = vault.status;
-  if (!status?.configured) return null;
+  if (!status?.configured || remote) return null;
   if (!status.unlocked)
     return (
       <Button variant="ghost" size="icon" aria-label="Unlock secure folders" title="Unlock secure folders" onClick={() => vault.ensureUnlocked()}>

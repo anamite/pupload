@@ -10,6 +10,9 @@ folders for the things that aren't for everyone.
 * **Secure folders**: encrypted folders, greyed out and locked until you enter one master
   password. Their files and names are encrypted on the Pi, so they stay private from
   other people on the network *and* from anyone who takes the SD card or drive.
+* **Remote access** through a Cloudflare tunnel, behind a password *and* an authenticator
+  code. There are two passwords: the basic one opens the drive with secure folders invisible,
+  and the full one opens everything. The home network stays login-free.
 * **Recycle bin**: deleted files, folders and links wait 30 days (configurable), with
   restore, delete-forever and *Empty bin*.
 * **Device tracking**: every upload, link and delete records which device did it.
@@ -64,6 +67,7 @@ Pages already open on phones show a *"pupload has been updated — Reload"* mess
 | Option | Effect |
 | --- | --- |
 | `--port=9000` | preferred port (default 8080). If it's taken, the next free one is used |
+| `--remote-port=8090` | port for [remote access](#remote-access-from-anywhere) (default 8090, only on `127.0.0.1`; `0` turns it off) |
 | `--dir=/srv/pupload` | where to install when using the curl one-liner |
 | `--no-service` | set up only; don't install the background service |
 | `--no-thumbnails` | skip Pillow (image thumbnails) |
@@ -181,6 +185,8 @@ recycle bin), with a few differences:
 * search, *Recent*, *Media* and *My uploads* only include secure files on unlocked devices
 * on a locked device, secure items in the recycle bin appear as *Locked item*, and *Empty
   bin* leaves them in place
+* deleting a normal folder that has a secure folder somewhere inside also needs secure
+  folders unlocked, and in the recycle bin it's treated as a secure item
 
 ### What it protects, and what it doesn't
 
@@ -212,6 +218,101 @@ passwords a device has to wait before trying again, longer after each further mi
 
 ---
 
+## Remote access from anywhere
+
+pupload listens on two ports, both served by the same program:
+
+| Port | Who reaches it | Login |
+| --- | --- | --- |
+| **8080** (home network) | anyone on your Wi-Fi | none, as before |
+| **8090** (remote) | only programs on the Pi itself (`127.0.0.1`), i.e. a tunnel | password **and** authenticator code |
+
+A tunnel (Cloudflare Tunnel is free) connects a public HTTPS address such as
+`https://drive.example.com` to port 8090. Nothing is opened on your router, and nothing
+on the internet can reach port 8080.
+
+### Two passwords, one authenticator
+
+* **Basic password + code**: files, links and the recycle bin. Secure folders don't exist
+  as far as this sign-in is concerned: they aren't listed, searched, zipped or reachable by
+  path, and it can't delete a folder that holds one. It can't change where or how much is
+  stored.
+* **Full password + code**: everything, with secure folders unlocked.
+
+Both are checked the same way. Every try costs one scrypt computation whichever password
+is typed, and every mistake gets the same *"Wrong password or code"* reply, so a wrong try
+never reveals which part was wrong or which password came close. The code comes from any
+authenticator app (Google Authenticator, Aegis, 2FAS, 1Password…). It is based on the
+time, not on your IP address or network, so switching from Wi-Fi to mobile data never
+breaks it. Each code works only once.
+
+### Set it up
+
+1. At home, open **Settings → Remote access → Set up remote access**. Secure folders need to
+   be set up and unlocked on that device first, because the full password has to be able
+   to open them. You'll be asked for the master password if needed.
+2. Choose the two passwords (10+ characters, different from each other; the basic one can't
+   be the master password), scan the QR code with your authenticator app and type the code
+   it shows.
+3. Connect a tunnel on the Pi (below), open its address on your phone, and sign in.
+
+Remote access can only be set up, changed or turned off from the home network. The same
+section lists every signed-in remote device, and has **Sign out every remote device**,
+**New passwords or authenticator** (lost phone: do this from home) and **Turn off**.
+
+### Connect a Cloudflare tunnel
+
+Install `cloudflared` on the Pi:
+
+```bash
+sudo mkdir -p --mode=0755 /usr/share/keyrings
+curl -fsSL https://pkg.cloudflare.com/cloudflare-main.gpg | sudo tee /usr/share/keyrings/cloudflare-main.gpg >/dev/null
+echo 'deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main' | sudo tee /etc/apt/sources.list.d/cloudflared.list
+sudo apt-get update && sudo apt-get install -y cloudflared
+```
+
+**Try it** (a temporary `*.trycloudflare.com` address, no account needed; it lasts until you
+press Ctrl+C):
+
+```bash
+cloudflared tunnel --url http://127.0.0.1:8090
+```
+
+**Keep it** (your own domain on Cloudflare, starts on boot): in the Cloudflare dashboard open
+**Zero Trust → Networks → Tunnels → Create a tunnel** (type *Cloudflared*), run the
+`sudo cloudflared service install …` command it shows on the Pi, then add a **public
+hostname** such as `drive.example.com` with service **HTTP** and URL `127.0.0.1:8090`.
+
+* Point the tunnel at **8090**, never at 8080: 8080 has no login.
+* You don't need a Cloudflare Access application (the emailed one-time codes). pupload's own
+  sign-in replaces it.
+* The tunnel address is HTTPS, so Android offers the full app install from it too.
+
+### What protects it
+
+* **Two factors**: a stolen password is useless without your phone, and a code is useless
+  without the password.
+* **Guessing**: after 5 wrong tries an address has to wait (5 s, then doubling, up to 15 min).
+  If many addresses fail together (a botnet), everyone slows to one try every 10 seconds.
+  At most two password checks run at once, so a flood of sign-in attempts can't use up the
+  Pi's memory. Cloudflare's network absorbs denial-of-service floods before they reach
+  your Pi, and its free plan can add a rate-limiting rule for `/api/auth/login` and Bot
+  Fight Mode if you want more.
+* **Sessions**: an HttpOnly, Secure, SameSite=Strict cookie. Cross-site requests are
+  refused, pages can't be framed, and search engines are told not to index them. A basic
+  sign-in lasts 2 weeks (Settings → Remote access) and survives restarts. A full sign-in
+  lasts as long as secure folders stay unlocked (12 hours by default). It ends when the Pi
+  restarts, and **Lock every device** ends it too.
+* **On the SD card** (`data/remote.json`): the TOTP secret, a scrypt-derived check for the
+  basic password, and the secure folders' key wrapped by the full password (just like
+  `vault.json` does with the master password). So the full password matters as much as the
+  master password: make it long.
+* The remote port refuses anything it doesn't need: setting up remote access, changing the
+  master password and unlocking with it are home-network only.
+* The Pi's clock has to be right for codes to work. Raspberry Pi OS syncs it over the
+  internet automatically.
+* A basic sign-in can see the storage gauge's totals, which include secure files.
+
 ## Settings
 
 Everything is under the gear icon (or **More → Settings** on phones) and applies right away.
@@ -224,6 +325,8 @@ Everything is under the gear icon (or **More → Settings** on phones) and appli
 * **Recycle bin**: how long deleted items are kept (7 / 30 / 90 days, or until you empty it).
 * **Secure folders**: set up, lock or unlock, change the password, reset it with the
   recovery key, and choose how long an unlock lasts.
+* **Remote access**: set up the two passwords and the authenticator, see who is signed in,
+  sign everyone out, and choose how long a basic sign-in lasts.
 
 The recycle bin lives inside the storage folder (`.pupload-trash`), so deleting even a huge
 folder is instant. Items in the bin still use disk space, and they count towards the limit
@@ -233,10 +336,11 @@ until the bin is emptied.
 
 ## A note on access
 
-There is no login for the shared drive, by design. Anyone who can reach the address can
-read, upload and delete (deletes are recoverable from the recycle bin). Put anything private
-in a [secure folder](#secure-folders). That's fine on a home network, but
-don't port-forward pupload to the internet. For remote access use a VPN or Tailscale.
+There is no login on the home-network port, by design. Anyone who can reach it can read,
+upload and delete (deletes are recoverable from the recycle bin). Put anything private in a
+[secure folder](#secure-folders). That's fine on a home network, but never port-forward it to
+the internet. For access from outside, use [remote access](#remote-access-from-anywhere)
+through a tunnel, or a VPN such as Tailscale.
 
 Uploads can't escape the storage folder, and saved links may only use `http(s)`, `ftp`,
 `smb`, `magnet`, `mailto` or `tel`. Only images, audio, video, PDFs and plain text are shown
@@ -263,11 +367,12 @@ On Windows use `.venv\Scripts\python run.py`.
 
 ```
 install.sh              one-line installer / updater (+ systemd service)
-run.py                  launcher (prints the LAN address)
+run.py                  launcher: the home-network port and the remote port, in one process
 app/
   main.py               HTTP routes, range requests, streamed ZIP, links, recycle bin
   storage.py            safe paths (real names <-> encrypted on-disk names), listings, quota, expiry
   vault.py              secure folders: keys, encrypted file format, sessions
+  remote.py             remote access: two passwords, authenticator codes, sign-ins, throttling
   trash.py              recycle bin: move in, restore, purge
   links.py              link validation and page-title lookup
   config.py             settings + disk discovery
@@ -279,5 +384,5 @@ frontend/
   src/components/       files, links, bin, layout, settings
   src/lib/              API client, uploads queue, audio player, device ID, theme, PWA
   public/               manifest, service worker, icons
-data/                   config.json, vault.json, pupload.db, files/, backups/ (not in git)
+data/                   config.json, vault.json, remote.json, pupload.db, files/, backups/ (not in git)
 ```

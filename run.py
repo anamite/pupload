@@ -1,8 +1,16 @@
 #!/usr/bin/env python3
-"""pupload launcher.  Usage:  python run.py [--host H] [--port P] [--strict-port]"""
+"""pupload launcher.
+
+Usage:  python run.py [--host H] [--port P] [--strict-port] [--remote-port R] [--remote-host H]
+
+Serves two ports from one process: the home-network port (no login) and the
+remote port for a tunnel such as Cloudflare Tunnel (password + authenticator
+code; see Settings -> Remote access). --remote-port 0 turns the second one off.
+"""
 from __future__ import annotations
 
 import argparse
+import asyncio
 import os
 import socket
 import sys
@@ -39,11 +47,11 @@ def port_free(host: str, port: int) -> bool:
     return True
 
 
-def pick_port(host: str, wanted: int, strict: bool) -> int:
-    if port_free(host, wanted) or strict:
+def pick_port(host: str, wanted: int, strict: bool, avoid: int = 0) -> int:
+    if strict or (wanted != avoid and port_free(host, wanted)):
         return wanted
     for port in range(wanted + 1, min(wanted + PORT_SEARCH, 65535) + 1):
-        if port_free(host, port):
+        if port != avoid and port_free(host, port):
             print(f"  ! port {wanted} is in use by another program, using {port} instead", flush=True)
             return port
     sys.exit(f"No free port between {wanted} and {wanted + PORT_SEARCH}; pass --port")
@@ -55,13 +63,17 @@ def main() -> None:
     ap.add_argument("--port", type=int, default=int(os.environ.get("PUPLOAD_PORT", "8080")))
     ap.add_argument("--strict-port", action="store_true",
                     help="fail instead of moving to the next free port when the port is taken")
+    ap.add_argument("--remote-port", type=int, default=int(os.environ.get("PUPLOAD_REMOTE_PORT", "8090")),
+                    help="port for remote access through a tunnel (0 = off). Never moves: the tunnel points at it")
+    ap.add_argument("--remote-host", default=os.environ.get("PUPLOAD_REMOTE_HOST", "127.0.0.1"),
+                    help="address for the remote port; keep 127.0.0.1 so only the tunnel can reach it")
     args = ap.parse_args()
 
     import uvicorn
 
-    from app import config
+    from app import config, remote
 
-    port = pick_port(args.host, args.port, args.strict_port)
+    port = pick_port(args.host, args.port, args.strict_port, avoid=args.remote_port)
     cfg = config.load()
     # Tell the installer (and anyone curious) where we actually ended up.
     try:
@@ -70,11 +82,51 @@ def main() -> None:
     except OSError:
         pass
 
+    remote_port = args.remote_port if 0 < args.remote_port < 65536 else 0
+    if remote_port and not port_free(args.remote_host, remote_port):
+        remote.LISTEN["error"] = f"port {remote_port} is used by another program"
+        print(f"  ! remote access is off: {remote.LISTEN['error']} (pass --remote-port)", flush=True)
+        remote_port = 0
+    if remote_port:
+        remote.LISTEN.update(host=args.remote_host, port=remote_port)
+
     print("")
     print(f"  {cfg['app_name']}  ->  http://{lan_ip()}:{port}", flush=True)
+    if remote_port:
+        state = "set up" if remote.configured() else "not set up yet: Settings -> Remote access"
+        print(f"  remote access (for a tunnel)  ->  http://{args.remote_host}:{remote_port}  ({state})")
     print(f"  storage: {cfg['storage_root']}")
     print("")
-    uvicorn.run("app.main:app", host=args.host, port=port, log_level="info", access_log=False)
+
+    from app.main import app, remote_app
+
+    servers = [uvicorn.Server(uvicorn.Config(app, host=args.host, port=port, log_level="info",
+                                             access_log=False))]
+    if remote_port:
+        # No lifespan: background jobs run once, with the home-network server.
+        servers.append(uvicorn.Server(uvicorn.Config(remote_app, host=args.remote_host, port=remote_port,
+                                                     log_level="info", access_log=False,
+                                                     lifespan="off", proxy_headers=False)))
+    asyncio.run(serve(servers))
+
+
+async def serve(servers: list) -> None:
+    """Run the servers side by side; when one stops (Ctrl+C, systemd), stop all."""
+    async def run(server) -> None:
+        try:
+            await server.serve()
+        except SystemExit:           # could not start (port grabbed meanwhile)
+            if server is servers[0]:
+                raise
+            print(f"  ! remote access could not start on port {server.config.port}", flush=True)
+            from app import remote
+            remote.LISTEN.update(port=None, error=f"could not listen on port {server.config.port}")
+
+    tasks = [asyncio.create_task(run(s)) for s in servers]
+    await tasks[0]
+    for server in servers[1:]:
+        server.should_exit = True
+    await asyncio.gather(*tasks[1:], return_exceptions=True)
 
 
 if __name__ == "__main__":

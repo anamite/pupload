@@ -34,6 +34,7 @@ DEFAULTS: Dict[str, Any] = {
     "thumbnails": True,
     "keep_free_bytes": 512 * 1024 * 1024,   # never fill the disk past this
     "vault_hours": 12,              # how long an unlock lasts on a device
+    "remote_days": 14,              # how long a basic remote sign-in lasts
 }
 
 # Filesystems that are never interesting as a storage target.
@@ -99,6 +100,7 @@ def sanitize(raw: Dict[str, Any]) -> Dict[str, Any]:
     cfg["thumbnails"] = _as_bool(cfg["thumbnails"], True)
     cfg["keep_free_bytes"] = _as_int(cfg["keep_free_bytes"], DEFAULTS["keep_free_bytes"], 0)
     cfg["vault_hours"] = _as_int(cfg["vault_hours"], DEFAULTS["vault_hours"], 1, 24 * 30)
+    cfg["remote_days"] = _as_int(cfg["remote_days"], DEFAULTS["remote_days"], 1, 365)
     return cfg
 
 

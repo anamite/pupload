@@ -8,6 +8,7 @@ import {
   type Sort,
   type Stats,
   type TrashItem,
+  type AuthStatus,
   type VaultStatus,
 } from "./api";
 import type { View } from "./router";
@@ -20,7 +21,18 @@ export const keys = {
   trash: ["trash"] as const,
   vault: ["vault"] as const,
   folders: ["folders"] as const,
+  auth: ["auth"] as const,
+  remote: ["remote"] as const,
 };
+
+export function useAuth() {
+  return useQuery({
+    queryKey: keys.auth,
+    queryFn: () => api<AuthStatus & { ok: boolean }>("/api/auth"),
+    staleTime: Infinity,
+    retry: 2,
+  });
+}
 
 interface ConfigResponse {
   settings: Settings;

@@ -9,6 +9,7 @@ import json
 import mimetypes
 import os
 import re
+import secrets
 import shutil
 import time
 import urllib.parse
@@ -24,8 +25,8 @@ from starlette.responses import (FileResponse, HTMLResponse, JSONResponse, Respo
 from starlette.routing import Mount, Route
 from starlette.staticfiles import StaticFiles
 
-from . import __version__, config, db, links, storage, trash, vault
-from .errors import StorageError, VaultLocked
+from . import __version__, config, db, links, remote, storage, trash, vault
+from .errors import NotFound, StorageError, VaultLocked
 from .links import LinkError
 from .storage import Loc
 
@@ -81,6 +82,28 @@ async def body_json(request: Request) -> Dict[str, Any]:
     return data if isinstance(data, dict) else {}
 
 
+def is_remote(request: Request) -> bool:
+    """Did this come in on the remote (tunnel) port?"""
+    return REMOTE in request.scope
+
+
+def remote_session(request: Request) -> Dict[str, Any]:
+    return request.scope.get(REMOTE) or {}
+
+
+def client_ip(request: Request) -> str:
+    """The caller's address. Through a tunnel every request comes from
+    127.0.0.1, so there the address the tunnel reports is used instead
+    (Cloudflare's own header, else the entry the proxy itself appended last;
+    earlier X-Forwarded-For entries come from the client and can be made up)."""
+    if is_remote(request):
+        forwarded = (request.headers.get("cf-connecting-ip")
+                     or (request.headers.get("x-forwarded-for") or "").split(",")[-1]).strip()
+        if forwarded:
+            return forwarded[:64]
+    return request.client.host if request.client else ""
+
+
 def device_of(request: Request) -> Dict[str, str]:
     """Who is calling: the browser sends a random per-device id and a friendly name."""
     raw_name = urllib.parse.unquote(request.headers.get("x-device-name") or "")
@@ -88,7 +111,7 @@ def device_of(request: Request) -> Dict[str, str]:
     return {
         "id": _DEVICE_ID_RE.sub("", request.headers.get("x-device-id") or "")[:64],
         "name": name or "Unknown device",
-        "ip": request.client.host if request.client else "",
+        "ip": client_ip(request),
     }
 
 
@@ -285,8 +308,17 @@ async def api_config(request: Request) -> Response:
     return ok({"settings": config.load(), "stats": storage.stats(), "version": __version__})
 
 
+# Settings a remote sign-in may not change: where and how much is stored, how
+# long unlocks last (full password), and on top of that remote access itself.
+REMOTE_FIXED = ("remote_days",)
+REMOTE_BASIC_FIXED = ("storage_root", "quota_bytes", "keep_free_bytes", "vault_hours", "remote_days")
+
+
 async def api_settings(request: Request) -> Response:
     patch = await body_json(request)
+    if is_remote(request):
+        fixed = REMOTE_FIXED if remote_session(request).get("tier") == "full" else REMOTE_BASIC_FIXED
+        patch = {k: v for k, v in patch.items() if k not in fixed}
 
     if "storage_root" in patch:
         wanted = Path(str(patch["storage_root"]).strip()).expanduser()
@@ -712,14 +744,16 @@ async def api_delete(request: Request) -> Response:
     for raw in paths_from(data):
         try:
             loc = storage.locate(raw)
-            storage.guard(loc)
+            if loc.path == storage.root() or not loc.path.exists():
+                continue
+            await asyncio.to_thread(storage.guard_delete, loc)
         except VaultLocked as exc:
             return err(exc)
-        except StorageError:
+        except NotFound:
             continue
+        except StorageError as exc:
+            return err(exc, 403)
         target = loc.path
-        if target == storage.root() or not target.exists():
-            continue
         rel = storage.rel_of(target)
         try:
             if permanent:
@@ -989,11 +1023,14 @@ async def api_trash_empty(request: Request) -> Response:
 # ---------------------------------------------------------------------------
 
 def _token(request: Request) -> Optional[str]:
+    """This device's secure-folder session. Remotely, it belongs to the sign-in."""
+    if is_remote(request):
+        return remote_session(request).get("vault_token")
     return request.cookies.get(vault.COOKIE)
 
 
 def _client_ip(request: Request) -> str:
-    return request.client.host if request.client else ""
+    return client_ip(request)
 
 
 def _with_session(response: Response, request: Request, token: str, expires: float) -> Response:
@@ -1047,7 +1084,8 @@ async def api_vault_unlock(request: Request) -> Response:
 
 
 async def api_vault_lock(request: Request) -> Response:
-    """Lock this device, or (from an unlocked device) every device."""
+    """Lock this device, or (from an unlocked device) every device. Remotely,
+    locking ends the full sign-in: this device is signed out."""
     data = await body_json(request)
     token = _token(request)
     if data.get("everywhere"):
@@ -1057,7 +1095,11 @@ async def api_vault_lock(request: Request) -> Response:
     else:
         vault.end_session(token)
     response = ok(vault.status(None))
-    response.delete_cookie(vault.COOKIE, path="/")
+    if is_remote(request):
+        remote.end(request.cookies.get(remote.COOKIE))
+        response.delete_cookie(remote.COOKIE, path="/")
+    else:
+        response.delete_cookie(vault.COOKIE, path="/")
     return response
 
 
@@ -1096,9 +1138,184 @@ async def api_vault_password(request: Request) -> Response:
     return ok(vault.status(_token(request)))
 
 
-class VaultSession:
-    """Marks every request as allowed, or not, to open secure folders, from
-    its session cookie. Everything downstream asks vault.current()."""
+# ---------------------------------------------------------------------------
+# Routes: signing in on the remote port
+# ---------------------------------------------------------------------------
+
+LOGIN_FAILED = "Wrong password or code"
+_login_gate = asyncio.Semaphore(2)      # scrypt uses 32 MiB a try: never many at once
+_login_waiting = 0
+
+
+def _remote_cookie(response: Response, request: Request, token: str, expires: float) -> Response:
+    host = (request.url.hostname or "").lower()
+    local = host in ("localhost", "127.0.0.1", "::1") or host.endswith(".localhost")
+    response.set_cookie(remote.COOKIE, token, max_age=max(60, int(expires - time.time())),
+                        path="/", httponly=True, samesite="strict", secure=not local)
+    return response
+
+
+def _auth_status(request: Request) -> Dict[str, Any]:
+    if not is_remote(request):
+        return {"remote": False}
+    found = remote_session(request)
+    return {
+        "remote": True,
+        "configured": remote.configured(),
+        "signed_in": bool(found),
+        "tier": found.get("tier"),
+        "expires": found.get("expires"),
+    }
+
+
+async def api_auth(request: Request) -> Response:
+    return ok(_auth_status(request))
+
+
+async def api_auth_login(request: Request) -> Response:
+    """Password + authenticator code. Any mistake gets the same reply, after a
+    similar delay, so a try never tells which part was wrong."""
+    global _login_waiting
+    if not is_remote(request):
+        return fail("Nothing to sign in to here", 404)
+    if not remote.configured():
+        return fail("Remote access is not set up. Set it up from home, in Settings", 409)
+    ip = client_ip(request)
+    wait = remote.throttled(ip)
+    if wait:
+        return fail(f"Too many tries. Wait {wait} s", 429)
+    if _login_waiting >= 6:
+        return fail("Busy. Try again in a moment", 429)
+    remote.note_try()
+    data = await body_json(request)
+    password = str(data.get("password") or "")[:1024]
+    code = str(data.get("code") or "")[:16]
+    started = time.monotonic()
+    _login_waiting += 1
+    try:
+        async with _login_gate:
+            result = await asyncio.to_thread(remote.check, password, code)
+    finally:
+        _login_waiting -= 1
+    if result is None:
+        remote.note_failure(ip)
+        # A wrong code is caught before the (slow) password check; pad it out.
+        await asyncio.sleep(max(0.0, 0.35 - (time.monotonic() - started)) + secrets.randbelow(250) / 1000)
+        return fail(LOGIN_FAILED, 403)
+    tier, data_key = result
+    if tier == "full" and not remote.full_is_current():
+        return fail("Secure folders were set up again. Set up remote access again from home", 409)
+    remote.note_success(ip)
+    old = request.cookies.get(remote.COOKIE)
+    if old:
+        remote.end(old)
+    token, expires = remote.start(tier, data_key, device_of(request)["name"], ip)
+    body = {"remote": True, "configured": True, "signed_in": True, "tier": tier, "expires": expires}
+    return _remote_cookie(ok(body), request, token, expires)
+
+
+async def api_auth_logout(request: Request) -> Response:
+    remote.end(request.cookies.get(remote.COOKIE))
+    response = ok({"remote": is_remote(request), "signed_in": False})
+    response.delete_cookie(remote.COOKIE, path="/")
+    return response
+
+
+# ---------------------------------------------------------------------------
+# Routes: setting up remote access (home network only)
+# ---------------------------------------------------------------------------
+
+async def api_remote(request: Request) -> Response:
+    return ok(remote.status())
+
+
+async def api_remote_begin(request: Request) -> Response:
+    """A new authenticator secret to scan. Setting up needs secure folders
+    unlocked here: the full password must be able to open them."""
+    if not vault.AVAILABLE:
+        return fail(NO_CRYPTO, 501)
+    if not vault.configured():
+        return fail("Set up secure folders first", 409)
+    try:
+        vault.require()
+    except VaultLocked as exc:
+        return err(exc)
+    return ok(remote.begin_setup("remote access"))
+
+
+async def api_remote_setup(request: Request) -> Response:
+    if not vault.AVAILABLE:
+        return fail(NO_CRYPTO, 501)
+    data = await body_json(request)
+    basic = str(data.get("basic") or "")
+    full = str(data.get("full") or "")
+    for label, password in (("Basic", basic), ("Full", full)):
+        problem = remote.password_problem(password)
+        if problem:
+            return fail(f"{label} password: {problem[0].lower()}{problem[1:]}")
+    if basic == full:
+        return fail("The two passwords must be different")
+    try:
+        vault.require()
+        data_key = vault.data_key()
+    except VaultLocked as exc:
+        return err(exc)
+    # The basic password must not open secure folders on its own anywhere.
+    if await asyncio.to_thread(vault.opens, basic):
+        return fail("The basic password can't be the secure folders' master password")
+    try:
+        await asyncio.to_thread(remote.setup, str(data.get("setup_id") or ""), str(data.get("code") or ""),
+                                basic, full, data_key)
+    except StorageError as exc:
+        return err(exc)
+    return ok(remote.status())
+
+
+async def api_remote_signout(request: Request) -> Response:
+    """Sign out every remote device."""
+    count = remote.end_all()
+    return ok({**remote.status(), "signed_out": count})
+
+
+async def api_remote_disable(request: Request) -> Response:
+    try:
+        vault.require()
+    except VaultLocked as exc:
+        return err(exc)
+    remote.disable()
+    return ok(remote.status())
+
+
+# ---------------------------------------------------------------------------
+# The two front doors
+# ---------------------------------------------------------------------------
+
+REMOTE = "pupload.remote"     # scope key: set on every request to the remote port
+
+# Open on the remote port without signing in: the page itself (its code is
+# public anyway) and signing in. Every other /api/ path needs a session.
+REMOTE_PUBLIC_API = ("/api/auth", "/api/auth/login", "/api/auth/logout")
+# Never on the remote port, whoever is signed in: remote access is changed from
+# home, and secure folders are only opened by the full password.
+REMOTE_NEVER = ("/api/remote", "/api/vault/setup", "/api/vault/unlock", "/api/vault/password",
+                "/api/ping")
+REMOTE_FULL_ONLY = ("/api/vault/lock", "/api/storage-options")
+REMOTE_HEADERS = [
+    (b"x-frame-options", b"DENY"),
+    (b"referrer-policy", b"no-referrer"),
+    (b"x-robots-tag", b"noindex, nofollow"),
+    (b"strict-transport-security", b"max-age=31536000"),
+    (b"cross-origin-opener-policy", b"same-origin"),
+]
+
+
+def _under(path: str, prefixes: Any) -> bool:
+    return any(path == p or path.startswith(p + "/") for p in prefixes)
+
+
+class RemoteGate:
+    """Wraps the app for the remote port. Finds the caller's sign-in, turns
+    away anything they may not do, and hardens every response."""
 
     def __init__(self, app: Any) -> None:
         self.app = app
@@ -1107,11 +1324,72 @@ class VaultSession:
         if scope["type"] != "http":
             await self.app(scope, receive, send)
             return
-        allowed = vault.session(Request(scope).cookies.get(vault.COOKIE)) is not None
+        request = Request(scope)
+        found = remote.session(request.cookies.get(remote.COOKIE))
+        scope[REMOTE] = found or {}
+        path = scope.get("path") or "/"
+
+        async def hardened(message: Any) -> None:
+            if message["type"] == "http.response.start":
+                message.setdefault("headers", [])
+                message["headers"] = list(message["headers"]) + REMOTE_HEADERS
+            await send(message)
+
+        refusal = self.refuse(request, path, found)
+        if refusal is not None:
+            await refusal(scope, receive, hardened)
+            return
+        await self.app(scope, receive, hardened)
+
+    @staticmethod
+    def refuse(request: Request, path: str, found: Optional[Dict[str, Any]]) -> Optional[Response]:
+        if request.method not in ("GET", "HEAD", "OPTIONS"):
+            # Only this page may change things (cookies are SameSite too).
+            origin = request.headers.get("origin")
+            hosts = {request.headers.get("host"), request.headers.get("x-forwarded-host")}
+            if origin and urllib.parse.urlsplit(origin).netloc not in hosts:
+                return fail("Cross-site request refused", 403)
+        if not path.startswith("/api/"):
+            return None
+        if _under(path, REMOTE_NEVER):
+            return fail("Not available over remote access", 403)
+        if path in REMOTE_PUBLIC_API:
+            return None
+        if not found:
+            response = fail("Sign in first", 401)
+            response.headers["Cache-Control"] = "no-store"
+            return response
+        if found.get("tier") != "full" and _under(path, REMOTE_FULL_ONLY):
+            return fail("Not available with the basic password", 403)
+        return None
+
+
+class VaultSession:
+    """Marks every request as allowed, or not, to open secure folders, from
+    its session cookie (or, on the remote port, from its sign-in). Everything
+    downstream asks vault.current()."""
+
+    def __init__(self, app: Any) -> None:
+        self.app = app
+
+    async def __call__(self, scope: Any, receive: Any, send: Any) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+        if REMOTE in scope:
+            found = scope[REMOTE]
+            full = found.get("tier") == "full"
+            allowed = full and vault.session(found.get("vault_token")) is not None
+            hidden = not full
+        else:
+            allowed = vault.session(Request(scope).cookies.get(vault.COOKIE)) is not None
+            hidden = False
         mark = vault.ACCESS.set(allowed)
+        hide = vault.HIDDEN.set(hidden)
         try:
             await self.app(scope, receive, send)
         finally:
+            vault.HIDDEN.reset(hide)
             vault.ACCESS.reset(mark)
 
 
@@ -1188,6 +1466,14 @@ routes: List[Any] = [
     Route("/api/vault/unlock", api_vault_unlock, methods=["POST"]),
     Route("/api/vault/lock", api_vault_lock, methods=["POST"]),
     Route("/api/vault/password", api_vault_password, methods=["POST"]),
+    Route("/api/auth", api_auth),
+    Route("/api/auth/login", api_auth_login, methods=["POST"]),
+    Route("/api/auth/logout", api_auth_logout, methods=["POST"]),
+    Route("/api/remote", api_remote),
+    Route("/api/remote/begin", api_remote_begin, methods=["POST"]),
+    Route("/api/remote/setup", api_remote_setup, methods=["POST"]),
+    Route("/api/remote/signout", api_remote_signout, methods=["POST"]),
+    Route("/api/remote/disable", api_remote_disable, methods=["POST"]),
     Route("/api/raw", api_file),
     Route("/api/download", api_file),
     Route("/api/zip", api_zip),
@@ -1196,3 +1482,6 @@ routes: List[Any] = [
 ]
 
 app = Starlette(routes=routes, lifespan=lifespan, middleware=[Middleware(VaultSession)])
+# The same app behind a sign-in, for the remote (tunnel) port. Both ports run
+# in one process, so they share the secure folders' key and sessions.
+remote_app = RemoteGate(app)

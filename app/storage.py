@@ -21,7 +21,7 @@ from pathlib import Path
 from typing import Any, Dict, Iterator, List, Optional, Tuple
 
 from . import config, db, vault
-from .errors import StorageError, VaultLocked  # noqa: F401  (re-exported)
+from .errors import NotFound, StorageError, VaultLocked  # noqa: F401  (re-exported)
 
 DAY = 86400.0
 PART_SUFFIX = ".pupload-part"
@@ -141,7 +141,8 @@ def locate(rel: str) -> Loc:
     """Resolve a browser-supplied logical path inside the storage root.
 
     Anything below a secure folder's top needs the vault unlocked for this
-    request (VaultLocked otherwise); the top folder itself does not.
+    request (VaultLocked otherwise); the top folder itself does not. Where
+    secure folders are hidden (a basic remote sign-in) they don't exist at all.
     """
     base = root()
     parts = _split(rel)
@@ -154,6 +155,8 @@ def locate(rel: str) -> Loc:
         else:
             current = current / part
             is_vault = is_vault_dir(current)
+            if is_vault and vault.HIDDEN.get():
+                raise NotFound()
     return Loc(_inside(base, current), "/".join(parts), secure, is_vault)
 
 
@@ -189,6 +192,8 @@ def locate_path(path: Path) -> Optional[Loc]:
         else:
             names.append(part)
             is_vault = is_vault_dir(current)
+            if is_vault and vault.HIDDEN.get():
+                return None
     return Loc(path, "/".join(names), secure, is_vault)
 
 
@@ -205,6 +210,29 @@ def guard(loc: Loc) -> None:
     """Changing a secure folder (even its top) needs it unlocked."""
     if loc.sealed:
         vault.require()
+
+
+def holds_vault(path: Path) -> bool:
+    """Is there a secure folder somewhere below this (plain) folder?"""
+    if not path.is_dir():
+        return False
+    for dirpath, dirnames, filenames in os.walk(str(path)):
+        dirnames[:] = [d for d in dirnames if d not in INTERNAL_DIRS]
+        if dirpath != str(path) and vault.MARKER in filenames:
+            return True
+    return False
+
+
+def guard_delete(loc: Loc) -> None:
+    """Deleting a folder that holds a secure folder deletes that too, so it
+    needs secure folders unlocked, like deleting the secure folder itself."""
+    guard(loc)
+    if loc.sealed or not holds_vault(loc.path):
+        return
+    if vault.HIDDEN.get():
+        raise StorageError("This folder can't be deleted with the basic password")
+    if vault.current() is None:
+        raise VaultLocked("This folder holds a secure folder. Unlock secure folders to delete it")
 
 
 def mark_vault(folder: Path) -> None:
@@ -414,6 +442,8 @@ def children(folder: Loc, show_hidden: bool, keys: Optional["vault.Keys"]) -> Li
         path = Path(de.path)
         rel = f"{folder.rel}/{name}" if folder.rel else name
         top = (not folder.sealed) and is_dir and is_vault_dir(path)
+        if top and vault.HIDDEN.get():
+            continue
         out.append(Node(Loc(path, rel, folder.sealed, top), is_dir, st))
     out.sort(key=lambda n: n.loc.name.lower())
     return out

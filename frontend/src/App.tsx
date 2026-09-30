@@ -11,12 +11,14 @@ import { BrandMark, Sidebar } from "@/components/layout/nav";
 import { TopBar } from "@/components/layout/top-bar";
 import { UploadPanel } from "@/components/layout/upload-panel";
 import { LinksView } from "@/components/links/links-view";
+import { AuthProvider, LoginScreen, useSignedOutWatch } from "@/components/remote/auth";
 import { SettingsDialog } from "@/components/settings-dialog";
 import { Button } from "@/components/ui/button";
 import { Toaster } from "@/components/ui/sonner";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import { VaultProvider } from "@/components/vault/vault";
-import { useConfig, useStats } from "@/lib/queries";
+import type { AuthStatus } from "@/lib/api";
+import { useAuth, useConfig, useStats } from "@/lib/queries";
 import { useRoute } from "@/lib/router";
 import { applyTheme, savedTheme } from "@/lib/theme";
 import { useUpdateNotice } from "@/lib/update-check";
@@ -78,7 +80,42 @@ function Shell() {
   );
 }
 
+function Unreachable({ error, retry, busy }: { error: unknown; retry: () => void; busy: boolean }) {
+  return (
+    <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
+      <div className="flex size-14 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
+        <WifiOff className="size-6" />
+      </div>
+      <h1 className="font-display text-2xl font-semibold">Cannot reach the server</h1>
+      <p className="max-w-sm text-sm text-muted-foreground">
+        Make sure the Pi is on and this device is on the same network. {(error as Error).message}
+      </p>
+      <Button onClick={retry} disabled={busy}>
+        <RefreshCw className={busy ? "animate-spin" : ""} /> Try again
+      </Button>
+    </div>
+  );
+}
+
+function Splash() {
+  return (
+    <div className="flex min-h-dvh items-center justify-center">
+      <BrandMark className="size-12 animate-pulse" />
+    </div>
+  );
+}
+
+/** Which door: on the home network straight in; remotely, signed in first. */
 function Boot() {
+  const { data, error, refetch, isFetching } = useAuth();
+  useSignedOutWatch(!!data?.remote);
+  if (error && !data) return <Unreachable error={error} retry={() => refetch()} busy={isFetching} />;
+  if (!data) return <Splash />;
+  if (data.remote && !data.signed_in) return <LoginScreen configured={!!data.configured} />;
+  return <Main auth={data} />;
+}
+
+function Main({ auth }: { auth: AuthStatus }) {
   const { data, error, refetch, isFetching } = useConfig();
   useStats(data?.stats);
 
@@ -86,37 +123,18 @@ function Boot() {
     if (data && !savedTheme()) applyTheme(data.settings.theme, false);
   }, [data]);
 
-  if (error && !data) {
-    return (
-      <div className="flex min-h-dvh flex-col items-center justify-center gap-4 p-6 text-center">
-        <div className="flex size-14 items-center justify-center rounded-2xl bg-destructive/10 text-destructive">
-          <WifiOff className="size-6" />
-        </div>
-        <h1 className="font-display text-2xl font-semibold">Cannot reach the server</h1>
-        <p className="max-w-sm text-sm text-muted-foreground">
-          Make sure the Pi is on and this device is on the same network. {(error as Error).message}
-        </p>
-        <Button onClick={() => refetch()} disabled={isFetching}>
-          <RefreshCw className={isFetching ? "animate-spin" : ""} /> Try again
-        </Button>
-      </div>
-    );
-  }
-  if (!data) {
-    return (
-      <div className="flex min-h-dvh items-center justify-center">
-        <BrandMark className="size-12 animate-pulse" />
-      </div>
-    );
-  }
+  if (error && !data) return <Unreachable error={error} retry={() => refetch()} busy={isFetching} />;
+  if (!data) return <Splash />;
   return (
-    <AppProvider settings={data.settings} version={data.version}>
-      <DialogsProvider>
-        <VaultProvider>
-          <Shell />
-        </VaultProvider>
-      </DialogsProvider>
-    </AppProvider>
+    <AuthProvider status={auth}>
+      <AppProvider settings={data.settings} version={data.version}>
+        <DialogsProvider>
+          <VaultProvider>
+            <Shell />
+          </VaultProvider>
+        </DialogsProvider>
+      </AppProvider>
+    </AuthProvider>
   );
 }
 

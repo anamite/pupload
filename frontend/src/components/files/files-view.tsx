@@ -80,6 +80,8 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
   const locked = isError && isLocked(error);
   const items = (!locked && data?.items) || NO_ITEMS;
   const secureHere = view === "files" && !searching && !locked && !!data?.folder?.secure;
+  // Signed in remotely with the basic password, secure folders don't exist.
+  const canSecure = !secureHere && !vault.status?.hidden;
 
   const [selected, setSelected] = React.useState<Set<string>>(new Set());
   const anchor = React.useRef<string | null>(null);
@@ -302,7 +304,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
             {canCreate && !phone && (
               <>
                 <UploadButton onFiles={() => fileInput.current?.click()} onFolder={() => dirInput.current?.click()} />
-                <NewFolderButton onFolder={newFolder} onSecure={secureHere ? undefined : newSecureFolder} />
+                <NewFolderButton onFolder={newFolder} onSecure={canSecure ? newSecureFolder : undefined} />
               </>
             )}
             {searching && (
@@ -432,7 +434,7 @@ export function FilesView({ view, path }: { view: FileView; path: string }) {
             <DropdownMenuItem onSelect={newFolder}>
               <FolderPlus /> New folder
             </DropdownMenuItem>
-            {!secureHere && (
+            {canSecure && (
               <DropdownMenuItem onSelect={newSecureFolder}>
                 <FolderLock /> New secure folder
               </DropdownMenuItem>
